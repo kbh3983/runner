@@ -1,0 +1,9 @@
+// 비공개 키 설정 — 실제 값으로 바꾸세요. 실제 키를 넣은 뒤에는 git 에 커밋하지 않도록 주의하세요.
+// 주의: xcconfig 에서 '//' 는 주석이므로 URL 은 넣지 마세요.
+KAKAO_NATIVE_APP_KEY = YOUR_KAKAO_NATIVE_APP_KEY
+NAVER_URL_SCHEME = runtogethernaver
+NAVER_CLIENT_ID = YOUR_NAVER_CLIENT_ID
+NAVER_CLIENT_SECRET = YOUR_NAVER_CLIENT_SECRET
+GOOGLE_IOS_CLIENT_ID = YOUR_IOS_CLIENT_ID.apps.googleusercontent.com
+GOOGLE_REVERSED_CLIENT_ID = com.googleusercontent.apps.YOUR_IOS_CLIENT_ID
+MAPS_API_KEY = YOUR_GOOGLE_MAPS_API_KEY

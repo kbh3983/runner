@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 네이버 개발자센터(https://developers.naver.com)에서 발급받은 값으로 교체하세요 -->
+<resources>
+    <string name="naver_client_id" translatable="false">YOUR_NAVER_CLIENT_ID</string>
+    <string name="naver_client_secret" translatable="false">YOUR_NAVER_CLIENT_SECRET</string>
+    <string name="naver_client_name" translatable="false">런투게더</string>
+</resources>

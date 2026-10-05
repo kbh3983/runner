@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "1015369721717",
+    "project_id": "runner-1e27d",
+    "storage_bucket": "runner-1e27d.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1015369721717:android:267c40e6a9b7f546f7953c",
+        "android_client_info": {
+          "package_name": "com.runtogether.running_app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "1015369721717-890re9la07aadfmh869p2u7l0v79plve.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAygQUxukzEvII3sgNFzd_XqMfU9z5e9_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "1015369721717-890re9la07aadfmh869p2u7l0v79plve.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

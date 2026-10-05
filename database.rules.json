@@ -1,0 +1,59 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "liveSessions": {
+      "$key": {
+        ".read": "auth != null && root.child('liveSessions/' + $key + '/allowed/' + auth.uid).exists()",
+        "meta": {
+          ".write": false
+        },
+        "allowed": {
+          ".write": false
+        },
+        "members": {
+          "$uid": {
+            ".write": "auth != null && auth.uid == $uid && root.child('liveSessions/' + $key + '/allowed/' + auth.uid).exists()",
+            ".validate": "newData.hasChild('userId')",
+            "userId": {
+              ".validate": "newData.isString() && newData.val() == $uid"
+            },
+            "name": {
+              ".validate": "newData.isString() && newData.val().length <= 50"
+            },
+            "colorIndex": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 9"
+            },
+            "distance": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 500"
+            },
+            "baseDistance": {
+              ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 5000"
+            },
+            "pace": {
+              ".validate": "newData.isNumber() && newData.val() >= 0"
+            },
+            "latitude": {
+              ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+            },
+            "longitude": {
+              ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
+            },
+            "status": {
+              ".validate": "newData.isString() && (newData.val() == 'READY' || newData.val() == 'RUNNING' || newData.val() == 'PAUSED' || newData.val() == 'FINISHED')"
+            },
+            "connected": {
+              ".validate": "newData.isBoolean()"
+            },
+            "updatedAt": {
+              ".validate": "newData.isNumber() && newData.val() <= now + 60000"
+            },
+            "$other": {
+              ".validate": false
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,103 @@
+rules_version = '2';
+
+// RunTogether Firestore Security Rules
+// Data contract: docs/ARCHITECTURE.md (section 3).
+// Anything not matched below is denied.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ---------------------------------------------------------------- users
+    match /users/{uid} {
+      // Fields a client may write on its own user document.
+      // partyCounter / stats are written by Cloud Functions only.
+      function clientUserFields() {
+        return ['displayName', 'photoUrl', 'provider', 'fcmTokens', 'createdAt'];
+      }
+
+      function validUserValues() {
+        let d = request.resource.data;
+        return (!('displayName' in d) || (d.displayName is string && d.displayName.size() <= 100))
+          && (!('photoUrl' in d) || d.photoUrl == null || (d.photoUrl is string && d.photoUrl.size() <= 2048))
+          && (!('provider' in d) || d.provider in ['google', 'apple', 'kakao', 'naver', 'instagram'])
+          && (!('fcmTokens' in d) || (d.fcmTokens is list && d.fcmTokens.size() <= 20));
+      }
+
+      allow get: if isSelf(uid);
+      allow create: if isSelf(uid)
+        && request.resource.data.keys().hasOnly(clientUserFields())
+        && validUserValues();
+      allow update: if isSelf(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(clientUserFields())
+        && validUserValues();
+      allow delete: if false;
+
+      // Functions only write; owner may read.
+      match /monthlyStats/{month} {
+        allow read: if isSelf(uid);
+        allow write: if false;
+      }
+    }
+
+    // ----------------------------------------------------------------- runs
+    match /runs/{runId} {
+      function validNewRun() {
+        let d = request.resource.data;
+        return d.id == runId
+          && d.ownerId == request.auth.uid
+          && !('verification' in d)
+          && d.mode in ['solo', 'group']
+          && d.distanceM is number && d.distanceM >= 0 && d.distanceM < 500000
+          && d.durationMs is number && d.durationMs >= 0
+          && d.startedAt is number
+          && d.endedAt is number
+          && (!('memos' in d) || d.memos is list);
+      }
+
+      // Reading a non-existent run is allowed so the client can check whether
+      // an idempotent upload already happened (runId is a client UUID).
+      allow get: if signedIn() && (resource == null || resource.data.ownerId == request.auth.uid);
+      allow list: if signedIn() && resource.data.ownerId == request.auth.uid;
+      allow create: if signedIn() && validNewRun();
+      allow update: if signedIn()
+        && resource.data.ownerId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memos', 'updatedAt'])
+        && (!('memos' in request.resource.data) || request.resource.data.memos is list);
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------- parties
+    match /parties/{partyKey} {
+      function isPartyMember() {
+        return signedIn()
+          && request.auth.uid in get(/databases/$(database)/documents/parties/$(partyKey)).data.memberIds;
+      }
+
+      // Supports both get and `where('memberIds', 'array-contains', uid)` queries.
+      allow read: if signedIn() && request.auth.uid in resource.data.memberIds;
+      allow write: if false; // Cloud Functions only
+
+      // Password hash / brute-force counters — never accessible to clients.
+      match /private/{doc=**} {
+        allow read, write: if false;
+      }
+
+      match /results/{runId} {
+        allow read: if isPartyMember();
+        allow write: if false;
+      }
+    }
+
+    // ------------------------------------------------------------- default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
