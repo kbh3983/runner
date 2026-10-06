@@ -31,6 +31,14 @@ class RunTogetherApp extends StatelessWidget {
         GlobalWidgetsLocalizations.delegate,
         GlobalCupertinoLocalizations.delegate,
       ],
+      // 시스템 내비게이션 바(하단)와 겹치지 않도록 모든 화면/시트/다이얼로그에 하단 여백 적용
+      builder: (context, child) => ColoredBox(
+        color: AppColors.bg,
+        child: SafeArea(
+          top: false,
+          child: child ?? const SizedBox.shrink(),
+        ),
+      ),
       home: const AuthGate(),
     );
   }

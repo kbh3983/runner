@@ -39,7 +39,7 @@ class ThumbnailService {
   /// 지도 없이 경로만 그린 PNG
   Future<Uint8List?> renderRoutePng(List<List<LatLng>> segments, {int size = 600, Color? color}) async {
     final all = segments.expand((s) => s).toList();
-    if (all.length < 2) return null;
+    if (all.isEmpty) return null;
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final rect = Rect.fromLTWH(0, 0, size.toDouble(), size.toDouble());
@@ -70,7 +70,11 @@ class RoutePainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final all = segments.expand((s) => s).toList();
-    if (all.length < 2) return;
+    if (all.isEmpty) return;
+    if (all.length == 1) {
+      canvas.drawCircle(Offset(size.width / 2, size.height / 2), strokeWidth * 2, Paint()..color = color);
+      return;
+    }
     var minLat = all.first.latitude, maxLat = minLat;
     var minLng = all.first.longitude, maxLng = minLng;
     for (final pt in all) {

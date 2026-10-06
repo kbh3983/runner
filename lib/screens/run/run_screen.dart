@@ -17,15 +17,19 @@ import 'run_finish_screen.dart';
 
 /// 러닝 화면 (혼자 / 같이 뛰기 공용)
 class RunScreen extends StatefulWidget {
-  const RunScreen({super.key, required RunConfig this.config, this.countdownTo, this.countdownAlways = false})
-      : resumeExisting = false;
+  const RunScreen({
+    super.key,
+    required RunConfig this.config,
+    this.countdownTo,
+    this.countdownAlways = false,
+  }) : resumeExisting = false;
 
   /// 이미 진행 중인(또는 복구된) 러닝으로 돌아가기
   const RunScreen.resume({super.key})
-      : config = null,
-        countdownTo = null,
-        countdownAlways = false,
-        resumeExisting = true;
+    : config = null,
+      countdownTo = null,
+      countdownAlways = false,
+      resumeExisting = true;
 
   final RunConfig? config;
 
@@ -47,6 +51,7 @@ class _RunScreenState extends State<RunScreen> {
   String? _selectedMember;
   int _lastCameraMove = 0;
   LatLng? _initial;
+  bool _mapReady = false;
   StreamSubscription<FinishReason>? _finishSub;
 
   // 카운트다운
@@ -86,10 +91,13 @@ class _RunScreenState extends State<RunScreen> {
       return;
     }
     final cfg = widget.config!;
-    if (cfg.mode == RunMode.group && (widget.countdownTo != null || widget.countdownAlways)) {
-      _startCountdown();
-    } else {
+    if (cfg.mode == RunMode.group &&
+        widget.countdownTo == null &&
+        !widget.countdownAlways) {
       await _startNow();
+    } else {
+      // 혼자 러닝: countdownTo 없이 5초 카운트다운 후 출발
+      _startCountdown();
     }
   }
 
@@ -97,7 +105,8 @@ class _RunScreenState extends State<RunScreen> {
     final targetLocal = widget.countdownTo != null
         ? ServerClock.toLocal(widget.countdownTo!)
         : DateTime.now().millisecondsSinceEpoch + 5000;
-    final effectiveTarget = targetLocal < DateTime.now().millisecondsSinceEpoch + 1000
+    final effectiveTarget =
+        targetLocal < DateTime.now().millisecondsSinceEpoch + 1000
         ? DateTime.now().millisecondsSinceEpoch + 5000
         : targetLocal;
     VoiceService.instance.init();
@@ -129,7 +138,15 @@ class _RunScreenState extends State<RunScreen> {
         });
       });
     });
-    setState(() => _cdShown = 5);
+
+    final initialRemaining =
+        effectiveTarget - DateTime.now().millisecondsSinceEpoch;
+    if (initialRemaining > 5000) {
+      setState(() => _cdWaitSec = (initialRemaining / 1000).ceil());
+    } else if (initialRemaining > 0) {
+      setState(() => _cdShown = (initialRemaining / 1000).ceil());
+      VoiceService.instance.speakNow('$_cdShown');
+    }
   }
 
   Future<void> _startNow({bool announce = true}) async {
@@ -151,14 +168,18 @@ class _RunScreenState extends State<RunScreen> {
 
   void _fail(String message) {
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
     Navigator.of(context).maybePop();
   }
 
   void _goFinish() {
     final run = tracker.run;
     if (run == null || !mounted) return;
-    Navigator.of(context).pushReplacement(MaterialPageRoute(builder: (_) => RunFinishScreen(runId: run.id)));
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (_) => RunFinishScreen(runId: run.id)),
+    );
   }
 
   // ------------------------------------------------------------ 지도
@@ -200,7 +221,9 @@ class _RunScreenState extends State<RunScreen> {
       _map?.animateCamera(CameraUpdate.newLatLngZoom(p, 16));
       _map?.showMarkerInfoWindow(MarkerId('m_$uid'));
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${m?.name ?? '파티원'}님의 위치 정보가 아직 없어요')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${m?.name ?? '파티원'}님의 위치 정보가 아직 없어요')),
+      );
     }
   }
 
@@ -209,27 +232,31 @@ class _RunScreenState extends State<RunScreen> {
     for (var i = 0; i < tracker.segments.length; i++) {
       final seg = tracker.segments[i];
       if (seg.length < 2) continue;
-      set.add(Polyline(
-        polylineId: PolylineId('me_$i'),
-        points: List.of(seg),
-        color: AppColors.route,
-        width: 7,
-        jointType: JointType.round,
-        startCap: Cap.roundCap,
-        endCap: Cap.roundCap,
-        zIndex: 2,
-      ));
+      set.add(
+        Polyline(
+          polylineId: PolylineId('me_$i'),
+          points: List.of(seg),
+          color: AppColors.route,
+          width: 7,
+          jointType: JointType.round,
+          startCap: Cap.roundCap,
+          endCap: Cap.roundCap,
+          zIndex: 2,
+        ),
+      );
     }
     tracker.memberTrails.forEach((uid, trail) {
       if (trail.length < 2) return;
       final color = MemberColors.of(tracker.liveMembers[uid]?.colorIndex);
-      set.add(Polyline(
-        polylineId: PolylineId('t_$uid'),
-        points: List.of(trail),
-        color: color.withValues(alpha: uid == _selectedMember ? 0.95 : 0.55),
-        width: uid == _selectedMember ? 5 : 3,
-        zIndex: 1,
-      ));
+      set.add(
+        Polyline(
+          polylineId: PolylineId('t_$uid'),
+          points: List.of(trail),
+          color: color.withValues(alpha: uid == _selectedMember ? 0.95 : 0.55),
+          width: uid == _selectedMember ? 5 : 3,
+          zIndex: 1,
+        ),
+      );
     });
     return set;
   }
@@ -242,8 +269,14 @@ class _RunScreenState extends State<RunScreen> {
           Marker(
             markerId: MarkerId('m_${m.userId}'),
             position: LatLng(m.latitude!, m.longitude!),
-            icon: BitmapDescriptor.defaultMarkerWithHue(MemberColors.hueOf(m.colorIndex)),
-            infoWindow: InfoWindow(title: m.name, snippet: '${m.distanceKm.toStringAsFixed(2)} km · ${m.statusLabel}'),
+            icon: BitmapDescriptor.defaultMarkerWithHue(
+              MemberColors.hueOf(m.colorIndex),
+            ),
+            infoWindow: InfoWindow(
+              title: m.name,
+              snippet:
+                  '${m.distanceKm.toStringAsFixed(2)} km · ${m.statusLabel}',
+            ),
             zIndexInt: m.userId == _selectedMember ? 2 : 1,
           ),
     };
@@ -254,16 +287,135 @@ class _RunScreenState extends State<RunScreen> {
   Future<void> _confirmStop() async {
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('러닝을 종료할까요?'),
-        content: Text('${Fmt.km(tracker.distanceM)} km · ${Fmt.duration(tracker.movingMs)}'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('계속 달리기')),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('종료', style: TextStyle(color: AppColors.danger)),
+      builder: (ctx) => Dialog(
+        backgroundColor: AppColors.surfaceHigh,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: AppColors.neon, width: 1.0),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '러닝을 종료할까요?',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: -0.5,
+                ),
+              ),
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(
+                  color: AppColors.bg,
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          Fmt.km(tracker.distanceM),
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.neon,
+                            letterSpacing: -1,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        const Text(
+                          'km',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                    Container(width: 1, height: 32, color: AppColors.outline),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          Fmt.duration(tracker.movingMs),
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          '시간',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: AppColors.textSecondary,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 1000,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        side: const BorderSide(color: AppColors.outline),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text(
+                        '계속 달리기',
+                        style: TextStyle(
+                          color: AppColors.textPrimary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 1618,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.neon,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text(
+                        '종료하기',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 15,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
     if (ok == true) await tracker.finish(FinishReason.manual);
@@ -280,9 +432,17 @@ class _RunScreenState extends State<RunScreen> {
         children: [
           Column(
             children: [
-              Expanded(flex: isGroup ? 9 : 11, child: _buildMap()),
+              AspectRatio(aspectRatio: 1, child: _buildMap()),
               _StatsPanel(tracker: tracker, compact: isGroup),
-              if (isGroup) Expanded(flex: 8, child: _GroupPanel(tracker: tracker, onTapMember: _focusMember, selected: _selectedMember)),
+              if (isGroup)
+                Expanded(
+                  flex: 8,
+                  child: _GroupPanel(
+                    tracker: tracker,
+                    onTapMember: _focusMember,
+                    selected: _selectedMember,
+                  ),
+                ),
               if (!isGroup) const Spacer(flex: 3),
               const SizedBox(height: 112),
             ],
@@ -293,11 +453,20 @@ class _RunScreenState extends State<RunScreen> {
               padding: const EdgeInsets.all(12),
               child: Row(
                 children: [
-                  _RoundIcon(icon: Icons.keyboard_arrow_down, onTap: () => Navigator.of(context).maybePop()),
+                  _RoundIcon(
+                    icon: Icons.keyboard_arrow_down,
+                    onTap: () => Navigator.of(context).maybePop(),
+                  ),
                   const Spacer(),
-                  if (run?.goalType != null && run!.goalType != GoalType.none) _GoalBadge(tracker: tracker),
+                  if (run?.goalType != null && run!.goalType != GoalType.none)
+                    _GoalBadge(tracker: tracker),
                   const Spacer(),
-                  _RoundIcon(icon: _follow ? Icons.my_location : Icons.location_searching, onTap: _recenter),
+                  _RoundIcon(
+                    icon: _follow
+                        ? Icons.my_location
+                        : Icons.location_searching,
+                    onTap: _recenter,
+                  ),
                 ],
               ),
             ),
@@ -307,9 +476,13 @@ class _RunScreenState extends State<RunScreen> {
             left: 0,
             right: 0,
             bottom: 24,
-            child: SafeArea(top: false, child: _Controls(tracker: tracker, onStop: _confirmStop)),
+            child: SafeArea(
+              top: false,
+              child: _Controls(tracker: tracker, onStop: _confirmStop),
+            ),
           ),
-          if (_cdShown != null || _cdWaitSec != null) _CountdownOverlay(number: _cdShown, waitSec: _cdWaitSec),
+          if (_cdShown != null || _cdWaitSec != null)
+            _CountdownOverlay(number: _cdShown, waitSec: _cdWaitSec),
         ],
       ),
     );
@@ -320,7 +493,10 @@ class _RunScreenState extends State<RunScreen> {
       return Container(
         color: const Color(0xFF1E1E1E),
         child: const Center(
-          child: Text('지도가 비활성화되어 있습니다.', style: TextStyle(color: Colors.white54)),
+          child: Text(
+            '지도가 비활성화되어 있습니다.',
+            style: TextStyle(color: Colors.white54),
+          ),
         ),
       );
     }
@@ -330,20 +506,41 @@ class _RunScreenState extends State<RunScreen> {
       onPointerMove: (_) {
         if (_follow) setState(() => _follow = false);
       },
-      child: GoogleMap(
-        initialCameraPosition: CameraPosition(target: pos ?? const LatLng(37.5665, 126.9780), zoom: 16),
-        onMapCreated: (c) {
-          _map = c;
-          if (pos != null) c.moveCamera(CameraUpdate.newLatLngZoom(pos, 16));
-        },
-        style: kDarkMapStyle,
-        myLocationEnabled: true,
-        myLocationButtonEnabled: false,
-        zoomControlsEnabled: false,
-        mapToolbarEnabled: false,
-        compassEnabled: false,
-        polylines: _polylines(),
-        markers: _markers(),
+      child: Stack(
+        children: [
+          GoogleMap(
+            initialCameraPosition: CameraPosition(
+              target: pos ?? const LatLng(37.5665, 126.9780),
+              zoom: 16,
+            ),
+            onMapCreated: (c) {
+              _map = c;
+              if (pos != null)
+                c.moveCamera(CameraUpdate.newLatLngZoom(pos, 16));
+              Future.delayed(const Duration(milliseconds: 700), () {
+                if (mounted) setState(() => _mapReady = true);
+              });
+            },
+            style: kDarkMapStyle,
+            myLocationEnabled: true,
+            myLocationButtonEnabled: false,
+            zoomControlsEnabled: false,
+            mapToolbarEnabled: false,
+            compassEnabled: false,
+            polylines: _polylines(),
+            markers: _markers(),
+          ),
+          Positioned.fill(
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _mapReady ? 0.0 : 1.0,
+                duration: const Duration(milliseconds: 600),
+                curve: Curves.easeOut,
+                child: Container(color: const Color(0xFF1D2026)),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -356,14 +553,14 @@ class _RoundIcon extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Material(
-        color: AppColors.bg.withValues(alpha: 0.85),
-        shape: const CircleBorder(),
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onTap,
-          child: Padding(padding: const EdgeInsets.all(10), child: Icon(icon)),
-        ),
-      );
+    color: AppColors.bg.withValues(alpha: 0.85),
+    shape: const CircleBorder(),
+    child: InkWell(
+      customBorder: const CircleBorder(),
+      onTap: onTap,
+      child: Padding(padding: const EdgeInsets.all(10), child: Icon(icon)),
+    ),
+  );
 }
 
 class _GoalBadge extends StatelessWidget {
@@ -377,22 +574,31 @@ class _GoalBadge extends StatelessWidget {
     String text;
     if (r.goalType == GoalType.distance && r.loyalty) {
       ratio = tracker.teamTotalKm * 1000 / (r.goalValue ?? 1);
-      text = '팀 ${tracker.teamTotalKm.toStringAsFixed(2)} / ${Fmt.km(r.goalValue ?? 0)} km';
+      text =
+          '팀 ${tracker.teamTotalKm.toStringAsFixed(2)} / ${Fmt.km(r.goalValue ?? 0)} km';
     } else if (r.goalType == GoalType.distance) {
       ratio = tracker.distanceM / (r.goalValue ?? 1);
       text = '목표 ${Fmt.km(r.goalValue ?? 0)} km';
     } else {
       ratio = tracker.movingMs / ((r.goalValue ?? 1) * 1000);
-      final left = ((r.goalValue ?? 0) * 1000 - tracker.movingMs).clamp(0, double.infinity).toInt();
+      final left = ((r.goalValue ?? 0) * 1000 - tracker.movingMs)
+          .clamp(0, double.infinity)
+          .toInt();
       text = '남은 시간 ${Fmt.duration(left)}';
     }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(color: AppColors.bg.withValues(alpha: 0.85), borderRadius: BorderRadius.circular(20)),
+      decoration: BoxDecoration(
+        color: AppColors.bg.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(20),
+      ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(text, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13)),
+          Text(
+            text,
+            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+          ),
           const SizedBox(height: 4),
           SizedBox(
             width: 140,
@@ -417,27 +623,39 @@ class _StatsPanel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final paused = tracker.state == TrackerState.paused;
     return Container(
       width: double.infinity,
       color: AppColors.bg,
       padding: EdgeInsets.fromLTRB(20, compact ? 12 : 24, 20, compact ? 8 : 16),
       child: Column(
         children: [
-          if (paused)
-            Container(
-              margin: const EdgeInsets.only(bottom: 8),
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-              decoration: BoxDecoration(color: AppColors.gold.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(8)),
-              child: const Text('일시정지됨', style: TextStyle(color: AppColors.gold, fontWeight: FontWeight.w800, fontSize: 12)),
-            ),
-          StatTile(value: Fmt.km(tracker.distanceM), label: '거리 (km)', big: true, color: AppColors.neon),
+          StatTile(
+            value: Fmt.km(tracker.distanceM),
+            label: '거리 (km)',
+            big: true,
+            color: AppColors.neon,
+          ),
           SizedBox(height: compact ? 8 : 20),
           Row(
             children: [
-              Expanded(child: StatTile(value: Fmt.pace(tracker.avgPaceSec), label: '평균 페이스')),
-              Expanded(child: StatTile(value: Fmt.duration(tracker.movingMs), label: '시간')),
-              Expanded(child: StatTile(value: Fmt.pace(tracker.currentPaceSec), label: '현재 페이스')),
+              Expanded(
+                child: StatTile(
+                  value: Fmt.pace(tracker.avgPaceSec),
+                  label: '평균 페이스',
+                ),
+              ),
+              Expanded(
+                child: StatTile(
+                  value: Fmt.duration(tracker.movingMs),
+                  label: '시간',
+                ),
+              ),
+              Expanded(
+                child: StatTile(
+                  value: Fmt.pace(tracker.currentPaceSec),
+                  label: '현재 페이스',
+                ),
+              ),
             ],
           ),
         ],
@@ -454,12 +672,24 @@ class _RankEntry {
   final int pace;
   final String status;
   final bool me;
-  const _RankEntry(this.uid, this.name, this.colorIndex, this.km, this.pace, this.status, this.me);
+  const _RankEntry(
+    this.uid,
+    this.name,
+    this.colorIndex,
+    this.km,
+    this.pace,
+    this.status,
+    this.me,
+  );
 }
 
 /// 같이 뛰기: 파티원 리스트 + 실시간 순위 (distance DESC, 앱에서 계산 — DB 에 저장하지 않음)
 class _GroupPanel extends StatelessWidget {
-  const _GroupPanel({required this.tracker, required this.onTapMember, required this.selected});
+  const _GroupPanel({
+    required this.tracker,
+    required this.onTapMember,
+    required this.selected,
+  });
   final RunTracker tracker;
   final void Function(String uid) onTapMember;
   final String? selected;
@@ -468,11 +698,27 @@ class _GroupPanel extends StatelessWidget {
     final me = tracker.run?.ownerId;
     final map = <String, _RankEntry>{};
     for (final p in tracker.config.participants) {
-      map[p.uid] = _RankEntry(p.uid, p.name, p.colorIndex, 0, 0, '대기', p.uid == me);
+      map[p.uid] = _RankEntry(
+        p.uid,
+        p.name,
+        p.colorIndex,
+        0,
+        0,
+        '대기',
+        p.uid == me,
+      );
     }
     for (final m in tracker.liveMembers.values) {
       if (m.userId == me) continue;
-      map[m.userId] = _RankEntry(m.userId, m.name, m.colorIndex, m.distanceKm, m.pace, m.statusLabel, false);
+      map[m.userId] = _RankEntry(
+        m.userId,
+        m.name,
+        m.colorIndex,
+        m.distanceKm,
+        m.pace,
+        m.statusLabel,
+        false,
+      );
     }
     if (me != null) {
       map[me] = _RankEntry(
@@ -504,23 +750,36 @@ class _GroupPanel extends StatelessWidget {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
               children: entries
-                  .map((e) => Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          selected: selected == e.uid,
-                          onSelected: (_) => onTapMember(e.uid),
-                          avatar: CircleAvatar(backgroundColor: MemberColors.of(e.colorIndex), radius: 7),
-                          label: Text(e.me ? '나' : e.name),
-                          selectedColor: MemberColors.of(e.colorIndex).withValues(alpha: 0.3),
-                          showCheckmark: false,
+                  .map(
+                    (e) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        selected: selected == e.uid,
+                        onSelected: (_) => onTapMember(e.uid),
+                        avatar: CircleAvatar(
+                          backgroundColor: MemberColors.of(e.colorIndex),
+                          radius: 7,
                         ),
-                      ))
+                        label: Text(e.me ? '나' : e.name),
+                        selectedColor: MemberColors.of(
+                          e.colorIndex,
+                        ).withValues(alpha: 0.3),
+                        showCheckmark: false,
+                      ),
+                    ),
+                  )
                   .toList(),
             ),
           ),
           const Padding(
             padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
-            child: Text('실시간 순위', style: TextStyle(fontWeight: FontWeight.w800, color: AppColors.textSecondary)),
+            child: Text(
+              '실시간 순위',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: AppColors.textSecondary,
+              ),
+            ),
           ),
           Expanded(
             child: ListView.builder(
@@ -533,30 +792,64 @@ class _GroupPanel extends StatelessWidget {
                   borderRadius: BorderRadius.circular(12),
                   child: Container(
                     margin: const EdgeInsets.only(bottom: 6),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
                     decoration: BoxDecoration(
-                      color: e.me ? AppColors.neon.withValues(alpha: 0.08) : AppColors.surface,
+                      color: e.me
+                          ? AppColors.neon.withValues(alpha: 0.08)
+                          : AppColors.surface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border(left: BorderSide(color: MemberColors.of(e.colorIndex), width: 4)),
+                      border: Border(
+                        left: BorderSide(
+                          color: MemberColors.of(e.colorIndex),
+                          width: 4,
+                        ),
+                      ),
                     ),
                     child: Row(
                       children: [
                         SizedBox(
                           width: 40,
-                          child: Text(Fmt.rankLabel(i + 1),
-                              style: TextStyle(fontSize: i < 3 ? 22 : 15, fontWeight: FontWeight.w900)),
+                          child: Text(
+                            Fmt.rankLabel(i + 1),
+                            style: TextStyle(
+                              fontSize: i < 3 ? 22 : 15,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
                         ),
                         Expanded(
-                          child: Text(e.me ? '${e.name} (나)' : e.name,
-                              overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          child: Text(
+                            e.me ? '${e.name} (나)' : e.name,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
                         ),
-                        Text(e.status, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                        Text(
+                          e.status,
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
                         const SizedBox(width: 10),
-                        Text(Fmt.pace(e.pace.toDouble()),
-                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 13)),
+                        Text(
+                          Fmt.pace(e.pace.toDouble()),
+                          style: const TextStyle(
+                            color: AppColors.textSecondary,
+                            fontSize: 13,
+                          ),
+                        ),
                         const SizedBox(width: 10),
-                        Text('${e.km.toStringAsFixed(2)} km',
-                            style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 15)),
+                        Text(
+                          '${e.km.toStringAsFixed(2)} km',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -580,16 +873,52 @@ class _Controls extends StatelessWidget {
     final state = tracker.state;
     if (state == TrackerState.running) {
       return Center(
-        child: _BigButton(icon: Icons.pause_rounded, color: AppColors.neon, onTap: tracker.pause, size: 84),
+        child: _BigButton(
+          icon: Icons.pause_rounded,
+          color: AppColors.neon,
+          onTap: tracker.pause,
+          size: 84,
+        ),
       );
     }
     if (state == TrackerState.paused) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.center,
+      return Column(
+        mainAxisSize: MainAxisSize.min,
         children: [
-          _BigButton(icon: Icons.stop_rounded, color: AppColors.danger, onTap: onStop, size: 76, label: '정지'),
-          const SizedBox(width: 36),
-          _BigButton(icon: Icons.play_arrow_rounded, color: AppColors.neon, onTap: tracker.resume, size: 76, label: '재생'),
+          Container(
+            margin: const EdgeInsets.only(bottom: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppColors.gold.withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Text(
+              '일시정지됨',
+              style: TextStyle(
+                color: AppColors.gold,
+                fontWeight: FontWeight.w900,
+                fontSize: 14,
+              ),
+            ),
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              _BigButton(
+                icon: Icons.stop_rounded,
+                color: AppColors.danger,
+                onTap: onStop,
+                size: 76,
+              ),
+              const SizedBox(width: 36),
+              _BigButton(
+                icon: Icons.play_arrow_rounded,
+                color: AppColors.neon,
+                onTap: tracker.resume,
+                size: 76,
+              ),
+            ],
+          ),
         ],
       );
     }
@@ -598,7 +927,13 @@ class _Controls extends StatelessWidget {
 }
 
 class _BigButton extends StatelessWidget {
-  const _BigButton({required this.icon, required this.color, required this.onTap, required this.size, this.label});
+  const _BigButton({
+    required this.icon,
+    required this.color,
+    required this.onTap,
+    required this.size,
+    this.label,
+  });
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
@@ -607,25 +942,29 @@ class _BigButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Material(
-            color: color,
-            shape: const CircleBorder(),
-            elevation: 8,
-            shadowColor: color.withValues(alpha: 0.6),
-            child: InkWell(
-              customBorder: const CircleBorder(),
-              onTap: onTap,
-              child: SizedBox(width: size, height: size, child: Icon(icon, size: size * 0.55, color: Colors.black)),
-            ),
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Material(
+        color: color,
+        shape: const CircleBorder(),
+        elevation: 8,
+        shadowColor: color.withValues(alpha: 0.6),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: SizedBox(
+            width: size,
+            height: size,
+            child: Icon(icon, size: size * 0.55, color: Colors.black),
           ),
-          if (label != null) ...[
-            const SizedBox(height: 6),
-            Text(label!, style: const TextStyle(fontWeight: FontWeight.w800)),
-          ],
-        ],
-      );
+        ),
+      ),
+      if (label != null) ...[
+        const SizedBox(height: 6),
+        Text(label!, style: const TextStyle(fontWeight: FontWeight.w800)),
+      ],
+    ],
+  );
 }
 
 class _CountdownOverlay extends StatelessWidget {
@@ -643,18 +982,32 @@ class _CountdownOverlay extends StatelessWidget {
             ? Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const Text('곧 출발합니다', style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                  const Text(
+                    '곧 출발합니다',
+                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800),
+                  ),
                   const SizedBox(height: 8),
-                  Text('$waitSec초', style: const TextStyle(color: AppColors.textSecondary, fontSize: 18)),
+                  Text(
+                    '$waitSec초',
+                    style: const TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 18,
+                    ),
+                  ),
                 ],
               )
             : AnimatedSwitcher(
                 duration: const Duration(milliseconds: 250),
-                transitionBuilder: (c, a) => ScaleTransition(scale: a, child: c),
+                transitionBuilder: (c, a) =>
+                    ScaleTransition(scale: a, child: c),
                 child: Text(
                   number == 0 ? 'GO!' : '${number ?? ''}',
                   key: ValueKey(number),
-                  style: const TextStyle(fontSize: 140, fontWeight: FontWeight.w900, color: AppColors.neon),
+                  style: const TextStyle(
+                    fontSize: 140,
+                    fontWeight: FontWeight.w900,
+                    color: AppColors.neon,
+                  ),
                 ),
               ),
       ),

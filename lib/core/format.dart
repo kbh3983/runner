@@ -45,6 +45,9 @@ class Fmt {
     return '$s초';
   }
 
+  /// ms → "100분" (시간 단위 없이 분으로만 표시)
+  static String minutes(int ms) => '${(ms / 60000).round()}분';
+
   static String date(int epochMs) =>
       DateFormat('yyyy.MM.dd (E)', 'ko_KR').format(DateTime.fromMillisecondsSinceEpoch(epochMs));
 

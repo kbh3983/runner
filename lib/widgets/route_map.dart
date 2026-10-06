@@ -46,6 +46,7 @@ class RouteMap extends StatefulWidget {
 class RouteMapState extends State<RouteMap> {
   GoogleMapController? _controller;
   bool _snapshotTaken = false;
+  bool _mapReady = false;
 
   List<LatLng> get _allPoints => widget.lines.expand((l) => l.segments.expand((s) => s)).toList();
 
@@ -73,6 +74,9 @@ class RouteMapState extends State<RouteMap> {
 
   Future<void> _onCreated(GoogleMapController c) async {
     _controller = c;
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted) setState(() => _mapReady = true);
+    });
     await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
     await _fit();
@@ -125,35 +129,58 @@ class RouteMapState extends State<RouteMap> {
       }
     }
     final markers = {...widget.markers};
-    if (widget.showStartEnd && pts.length >= 2 && widget.lines.length == 1) {
-      markers.add(Marker(
-        markerId: const MarkerId('start'),
-        position: pts.first,
-        icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
-        infoWindow: const InfoWindow(title: '출발'),
-      ));
-      markers.add(Marker(
-        markerId: const MarkerId('end'),
-        position: pts.last,
-        icon: BitmapDescriptor.defaultMarkerWithHue(75),
-        infoWindow: const InfoWindow(title: '도착'),
-      ));
+    if (widget.showStartEnd && pts.isNotEmpty && widget.lines.length == 1) {
+      if (pts.length == 1) {
+        markers.add(Marker(
+          markerId: const MarkerId('single'),
+          position: pts.first,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          infoWindow: const InfoWindow(title: '기록된 위치'),
+        ));
+      } else {
+        markers.add(Marker(
+          markerId: const MarkerId('start'),
+          position: pts.first,
+          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          infoWindow: const InfoWindow(title: '출발'),
+        ));
+        markers.add(Marker(
+          markerId: const MarkerId('end'),
+          position: pts.last,
+          icon: BitmapDescriptor.defaultMarkerWithHue(75),
+          infoWindow: const InfoWindow(title: '도착'),
+        ));
+      }
     }
     final initial = pts.isNotEmpty ? pts.first : const LatLng(37.5665, 126.9780);
-    return GoogleMap(
-      initialCameraPosition: CameraPosition(target: initial, zoom: 15),
-      onMapCreated: _onCreated,
-      polylines: polylines,
-      markers: markers,
-      style: kDarkMapStyle,
-      myLocationButtonEnabled: false,
-      zoomControlsEnabled: false,
-      mapToolbarEnabled: false,
-      compassEnabled: false,
-      scrollGesturesEnabled: widget.interactive,
-      zoomGesturesEnabled: widget.interactive,
-      rotateGesturesEnabled: widget.interactive,
-      tiltGesturesEnabled: false,
+    return Stack(
+      children: [
+        GoogleMap(
+          initialCameraPosition: CameraPosition(target: initial, zoom: 15),
+          onMapCreated: _onCreated,
+          polylines: polylines,
+          markers: markers,
+          style: kDarkMapStyle,
+          myLocationButtonEnabled: false,
+          zoomControlsEnabled: false,
+          mapToolbarEnabled: false,
+          compassEnabled: false,
+          scrollGesturesEnabled: widget.interactive,
+          zoomGesturesEnabled: widget.interactive,
+          rotateGesturesEnabled: widget.interactive,
+          tiltGesturesEnabled: false,
+        ),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedOpacity(
+              opacity: _mapReady ? 0.0 : 1.0,
+              duration: const Duration(milliseconds: 600),
+              curve: Curves.easeOut,
+              child: Container(color: const Color(0xFF1D2026)),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

@@ -100,7 +100,7 @@ class _RunFinishScreenState extends State<RunFinishScreen> {
                     borderRadius: BorderRadius.circular(20),
                     child: run.mode == RunMode.treadmill && ThumbnailService.instance.fileFor(run) != null
                         ? Image.file(ThumbnailService.instance.fileFor(run)!, fit: BoxFit.cover)
-                        : _segments.expand((s) => s).length < 2
+                        : _segments.expand((s) => s).isEmpty
                             ? Container(
                                 color: AppColors.surface,
                                 alignment: Alignment.center,

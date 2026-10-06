@@ -15,6 +15,7 @@ import '../services/push_service.dart';
 import '../services/run_tracker.dart';
 import '../services/server_clock.dart';
 import '../services/sync_service.dart';
+import '../services/weather_service.dart';
 import '../theme/app_theme.dart';
 import 'history/history_screen.dart';
 import 'party/party_sheets.dart';
@@ -30,7 +31,9 @@ class MainScreen extends StatefulWidget {
 }
 
 class _MainScreenState extends State<MainScreen> {
-  late final String uid = AppConfig.useFirebase ? FirebaseAuth.instance.currentUser!.uid : 'dummy_uid';
+  late final String uid = AppConfig.useFirebase
+      ? FirebaseAuth.instance.currentUser!.uid
+      : 'dummy_uid';
   StreamSubscription<List<Party>>? _partySub;
   StreamSubscription<FinishReason>? _finishSub;
   List<Party> _parties = [];
@@ -40,20 +43,19 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
-    _partySub = PartyService.instance.myActiveParties(uid).listen(
-      (list) {
-        setState(() => _parties = list);
-        _checkAutoStart(list);
-      },
-      onError: (Object e) => debugPrint('parties stream error: $e'),
-    );
+    _partySub = PartyService.instance.myActiveParties(uid).listen((list) {
+      setState(() => _parties = list);
+      _checkAutoStart(list);
+    }, onError: (Object e) => debugPrint('parties stream error: $e'));
     DeepLinkService.instance.pendingInvite.addListener(_onInvite);
     PushService.instance.opened.addListener(_onPushOpened);
     // 러닝 화면을 내려둔 상태에서 목표 달성 등으로 종료되면 종료 화면으로
     _finishSub = RunTracker.instance.onFinished.listen((_) {
       final run = RunTracker.instance.run;
       if (_runOpen || run == null || !mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => RunFinishScreen(runId: run.id)));
+      Navigator.of(
+        context,
+      ).push(MaterialPageRoute(builder: (_) => RunFinishScreen(runId: run.id)));
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkUnfinishedRun();
@@ -66,6 +68,8 @@ class _MainScreenState extends State<MainScreen> {
     try {
       await RunTracker.ensurePermission();
     } catch (_) {}
+    // 위치 권한 처리 후 날씨 정보 로드
+    WeatherService.instance.refresh(force: true);
   }
 
   @override
@@ -87,18 +91,81 @@ class _MainScreenState extends State<MainScreen> {
     final resume = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        title: const Text('진행 중이던 러닝이 있어요'),
-        content: Text('${Fmt.dateTime(run.startedAt)}\n${Fmt.km(run.distanceM)} km · ${Fmt.duration(run.durationMs)}\n\n'
-            '기록은 기기에 안전하게 저장되어 있어요.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('저장하고 끝내기')),
-          FilledButton(
-            style: FilledButton.styleFrom(minimumSize: const Size(100, 44)),
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('이어서 달리기'),
+      builder: (ctx) => Dialog(
+        backgroundColor: AppColors.surfaceHigh,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(8),
+          side: const BorderSide(color: AppColors.neon, width: 1.0),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(28, 32, 28, 28),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('진행 중이던 러닝이 있어요', style: TextStyle(fontSize: 19, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
+              const SizedBox(height: 8),
+              Text('${Fmt.dateTime(run.startedAt)} 시작', style: const TextStyle(fontSize: 13, color: AppColors.textSecondary)),
+              const SizedBox(height: 24),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                decoration: BoxDecoration(color: AppColors.bg, borderRadius: BorderRadius.circular(4)),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(Fmt.km(run.distanceM), style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppColors.neon, letterSpacing: -1)),
+                        const SizedBox(height: 2),
+                        const Text('km', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                    Container(width: 1, height: 32, color: AppColors.outline),
+                    Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(Fmt.duration(run.durationMs), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
+                        const SizedBox(height: 4),
+                        const Text('시간', style: TextStyle(fontSize: 11, color: AppColors.textSecondary, fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 32),
+              Row(
+                children: [
+                  Expanded(
+                    flex: 1000,
+                    child: OutlinedButton(
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                        side: const BorderSide(color: AppColors.outline),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('종료하기', style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w700, fontSize: 14)),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 1618,
+                    child: FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: AppColors.neon,
+                        foregroundColor: Colors.black,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('이어서 달리기', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 14)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
     await RunTracker.instance.restore(run);
@@ -108,7 +175,9 @@ class _MainScreenState extends State<MainScreen> {
     } else {
       final r = await RunTracker.instance.finish(FinishReason.manual);
       if (r != null && mounted) {
-        Navigator.of(context).push(MaterialPageRoute(builder: (_) => RunFinishScreen(runId: r.id)));
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => RunFinishScreen(runId: r.id)));
       }
     }
   }
@@ -130,10 +199,44 @@ class _MainScreenState extends State<MainScreen> {
     }
   }
 
+  void _toast(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.surfaceHigh,
+          margin: const EdgeInsets.only(bottom: 24, left: 16, right: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: const BorderSide(color: AppColors.neon, width: 1.5),
+          ),
+          content: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded, color: AppColors.neon),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  msg,
+                  style: const TextStyle(fontWeight: FontWeight.w700, color: AppColors.textPrimary),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+  }
+
   void _onInvite() {
     final invite = DeepLinkService.instance.pendingInvite.value;
     if (invite == null || !mounted) return;
     DeepLinkService.instance.pendingInvite.value = null;
+    // 한 번에 하나의 러닝만: 러닝 중에는 새 파티에 참여할 수 없음
+    if (RunTracker.instance.isActive || _runOpen) {
+      _toast('이미 러닝이 진행 중이에요. 러닝을 끝낸 뒤 참여해주세요.');
+      return;
+    }
     showJoinPartySheet(context, initialId: invite.id, initialPw: invite.pw);
   }
 
@@ -154,7 +257,9 @@ class _MainScreenState extends State<MainScreen> {
 
   Future<void> _openRun(Widget screen) async {
     _runOpen = true;
-    await Navigator.of(context).push(MaterialPageRoute(builder: (_) => screen, fullscreenDialog: true));
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => screen, fullscreenDialog: true));
     _runOpen = false;
   }
 
@@ -163,11 +268,19 @@ class _MainScreenState extends State<MainScreen> {
       _openRun(RunScreen.resume());
       return;
     }
+    if (_runOpen) return;
+    // 한 번에 하나의 러닝만: 같이 뛰기 참여 중에는 혼자 러닝 불가
+    if (_parties.isNotEmpty) {
+      _toast('같이 뛰기에 참여 중이에요. 파티가 끝난 뒤에 혼자 러닝을 시작할 수 있어요.');
+      return;
+    }
     try {
       await RunTracker.ensurePermission();
     } on LocationException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
       return;
     }
     if (!mounted) return;
@@ -177,11 +290,18 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _onTogetherTap() async {
+    // 한 번에 하나의 러닝만: 혼자 러닝 중에는 같이 뛰기 불가
+    if (RunTracker.instance.isActive || _runOpen) {
+      _toast('이미 러닝이 진행 중이에요. 러닝을 끝낸 뒤에 이용해주세요.');
+      return;
+    }
     try {
       await RunTracker.ensurePermission();
     } on LocationException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
       return;
     }
     if (!mounted) return;
@@ -191,46 +311,74 @@ class _MainScreenState extends State<MainScreen> {
   /// 단체 러닝 화면 열기 (카운트다운 포함)
   Future<void> launchGroupRun(Party party) async {
     if (RunTracker.instance.isActive) {
-      _openRun(RunScreen.resume());
+      // 같은 파티의 러닝이면 이어서, 아니면 안내
+      if (RunTracker.instance.isGroup &&
+          RunTracker.instance.run?.partyKey == party.key) {
+        _openRun(RunScreen.resume());
+      } else {
+        _toast('이미 러닝이 진행 중이에요. 러닝을 끝낸 뒤에 시작해주세요.');
+      }
+      return;
+    }
+    if (_runOpen) {
+      _toast('이미 러닝이 진행 중이에요.');
       return;
     }
     try {
       await RunTracker.ensurePermission();
     } on LocationException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
       return;
     }
     var base = 0.0;
     if (party.loyalty) {
       final prev = await LocalDb.instance.getRunsForParty(uid, party.key);
-      base = prev.where((r) => r.status == RunStatus.finished).fold(0.0, (s, r) => s + r.distanceM);
+      base = prev
+          .where((r) => r.status == RunStatus.finished)
+          .fold(0.0, (s, r) => s + r.distanceM);
     }
     if (!mounted) return;
     final startAt = party.startAt;
-    final countdownTo = (startAt != null && ServerClock.nowMs() < startAt + 1500) ? startAt : null;
-    _openRun(RunScreen(
-      config: RunConfig.fromParty(party, uid, baseDistanceM: base),
-      countdownTo: countdownTo,
-      countdownAlways: true,
-    ));
+    final countdownTo =
+        (startAt != null && ServerClock.nowMs() < startAt + 1500)
+        ? startAt
+        : null;
+    _openRun(
+      RunScreen(
+        config: RunConfig.fromParty(party, uid, baseDistanceM: base),
+        countdownTo: countdownTo,
+        countdownAlways: true,
+      ),
+    );
   }
 
   // ------------------------------------------------------------ UI
 
   @override
   Widget build(BuildContext context) {
-    final user = AppConfig.useFirebase ? FirebaseAuth.instance.currentUser : null;
+    final user = AppConfig.useFirebase
+        ? FirebaseAuth.instance.currentUser
+        : null;
     return Scaffold(
       appBar: AppBar(
-        title: const Text(AppConfig.appName, style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -0.5)),
+        title: const Text(
+          AppConfig.appName,
+          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: -0.5),
+        ),
         actions: [
           ValueListenableBuilder<bool>(
             valueListenable: SyncService.instance.syncing,
             builder: (_, syncing, _) => syncing
                 ? const Padding(
                     padding: EdgeInsets.all(16),
-                    child: SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+                    child: SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
                   )
                 : const SizedBox.shrink(),
           ),
@@ -238,14 +386,19 @@ class _MainScreenState extends State<MainScreen> {
             icon: CircleAvatar(
               radius: 16,
               backgroundColor: AppColors.surfaceHigh,
-              backgroundImage: user?.photoURL != null ? NetworkImage(user!.photoURL!) : null,
-              child: user?.photoURL == null ? const Icon(Icons.person, size: 18) : null,
+              backgroundImage: user?.photoURL != null
+                  ? NetworkImage(user!.photoURL!)
+                  : null,
+              child: user?.photoURL == null
+                  ? const Icon(Icons.person, size: 18)
+                  : null,
             ),
             onSelected: (v) async {
               if (v == 'logout') {
                 if (RunTracker.instance.isActive) {
-                  ScaffoldMessenger.of(context)
-                      .showSnackBar(const SnackBar(content: Text('러닝 중에는 로그아웃할 수 없어요')));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('러닝 중에는 로그아웃할 수 없어요')),
+                  );
                   return;
                 }
                 await PushService.instance.removeToken();
@@ -253,7 +406,10 @@ class _MainScreenState extends State<MainScreen> {
               }
             },
             itemBuilder: (_) => [
-              PopupMenuItem(enabled: false, child: Text(AuthService.instance.displayName)),
+              PopupMenuItem(
+                enabled: false,
+                child: Text(AuthService.instance.displayName),
+              ),
               const PopupMenuItem(value: 'logout', child: Text('로그아웃')),
             ],
           ),
@@ -264,43 +420,63 @@ class _MainScreenState extends State<MainScreen> {
         child: Column(
           children: [
             const _MonthSummary(),
+            const _WeatherCard(),
             Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (_parties.isNotEmpty) ...[
-                    _PartyStrip(parties: _parties, uid: uid, onRun: launchGroupRun),
-                    const SizedBox(height: 36),
-                  ],
-                  ListenableBuilder(
-                    listenable: RunTracker.instance,
-                    builder: (_, _) => Row(
+              child: LayoutBuilder(
+                builder: (context, constraints) => SingleChildScrollView(
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(
+                      minHeight: constraints.maxHeight,
+                    ),
+                    child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
-                      crossAxisAlignment: CrossAxisAlignment.end,
                       children: [
-                        _CircleAction(
-                          size: 150,
-                          filled: true,
-                          icon: RunTracker.instance.isActive ? Icons.play_arrow_rounded : Icons.directions_run_rounded,
-                          label: RunTracker.instance.isActive ? '러닝 중' : '러닝 시작',
-                          onTap: _startSolo,
-                        ),
-                        const SizedBox(width: 24),
-                        _CircleAction(
-                          size: 96,
-                          filled: false,
-                          icon: Icons.groups_rounded,
-                          label: '같이 뛰기',
-                          onTap: _onTogetherTap,
+                        if (_parties.isNotEmpty) ...[
+                          _PartyStrip(
+                            parties: _parties,
+                            uid: uid,
+                            onRun: launchGroupRun,
+                          ),
+                          const SizedBox(height: 36),
+                        ],
+                        ListenableBuilder(
+                          listenable: RunTracker.instance,
+                          builder: (_, _) => Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.end,
+                            children: [
+                              _CircleAction(
+                                size: 150,
+                                filled: true,
+                                icon: RunTracker.instance.isActive
+                                    ? Icons.play_arrow_rounded
+                                    : Icons.directions_run_rounded,
+                                label: RunTracker.instance.isActive
+                                    ? '러닝 중'
+                                    : '러닝 시작',
+                                onTap: _startSolo,
+                              ),
+                              const SizedBox(width: 24),
+                              _CircleAction(
+                                size: 96,
+                                filled: false,
+                                icon: Icons.groups_rounded,
+                                label: '같이 뛰기',
+                                onTap: _onTogetherTap,
+                              ),
+                            ],
+                          ),
                         ),
                       ],
                     ),
                   ),
-                ],
+                ),
               ),
             ),
             _BottomBar(
-              onHome: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const HistoryScreen())),
+              onHome: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const HistoryScreen())),
             ),
           ],
         ),
@@ -331,7 +507,11 @@ class _CircleAction extends StatelessWidget {
       children: [
         Material(
           color: filled ? AppColors.neon : AppColors.surface,
-          shape: CircleBorder(side: filled ? BorderSide.none : const BorderSide(color: AppColors.neon, width: 2)),
+          shape: CircleBorder(
+            side: filled
+                ? BorderSide.none
+                : const BorderSide(color: AppColors.neon, width: 2),
+          ),
           elevation: 0,
           child: InkWell(
             customBorder: const CircleBorder(),
@@ -342,15 +522,31 @@ class _CircleAction extends StatelessWidget {
               decoration: filled
                   ? BoxDecoration(
                       shape: BoxShape.circle,
-                      boxShadow: [BoxShadow(color: AppColors.neon.withValues(alpha: 0.45), blurRadius: 36, spreadRadius: 2)],
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.neon.withValues(alpha: 0.45),
+                          blurRadius: 36,
+                          spreadRadius: 2,
+                        ),
+                      ],
                     )
                   : null,
-              child: Icon(icon, size: size * 0.48, color: filled ? Colors.black : AppColors.neon),
+              child: Icon(
+                icon,
+                size: size * 0.48,
+                color: filled ? Colors.black : AppColors.neon,
+              ),
             ),
           ),
         ),
         const SizedBox(height: 12),
-        Text(label, style: TextStyle(fontWeight: FontWeight.w800, fontSize: filled ? 17 : 15)),
+        Text(
+          label,
+          style: TextStyle(
+            fontWeight: FontWeight.w800,
+            fontSize: filled ? 17 : 15,
+          ),
+        ),
       ],
     );
   }
@@ -358,7 +554,11 @@ class _CircleAction extends StatelessWidget {
 
 /// "러닝 시작" 버튼 위에 표시되는 내 파티 목록
 class _PartyStrip extends StatelessWidget {
-  const _PartyStrip({required this.parties, required this.uid, required this.onRun});
+  const _PartyStrip({
+    required this.parties,
+    required this.uid,
+    required this.onRun,
+  });
 
   final List<Party> parties;
   final String uid;
@@ -376,7 +576,8 @@ class _PartyStrip extends StatelessWidget {
         itemBuilder: (_, i) => PartyCard(
           party: parties[i],
           uid: uid,
-          onTap: () => showPartyDetailSheet(context, parties[i].key, onRun: onRun),
+          onTap: () =>
+              showPartyDetailSheet(context, parties[i].key, onRun: onRun),
         ),
       ),
     );
@@ -388,7 +589,9 @@ class _MonthSummary extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final uid = AppConfig.useFirebase ? FirebaseAuth.instance.currentUser!.uid : 'dummy_uid';
+    final uid = AppConfig.useFirebase
+        ? FirebaseAuth.instance.currentUser!.uid
+        : 'dummy_uid';
     return ValueListenableBuilder<int>(
       valueListenable: LocalDb.instance.changes,
       builder: (_, _, _) {
@@ -402,19 +605,36 @@ class _MonthSummary extends StatelessWidget {
           builder: (_, snap) {
             final runs = snap.data ?? [];
             final dist = runs.fold<double>(0, (s, r) => s + r.distanceM);
+            final time = runs.fold<int>(0, (s, r) => s + r.durationMs);
             final days = runs.map((r) {
               final d = DateTime.fromMillisecondsSinceEpoch(r.startedAt);
               return d.day;
             }).toSet();
             return Container(
               margin: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(18)),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(18),
+              ),
               child: Row(
                 children: [
-                  Expanded(child: StatColumn(value: Fmt.km(dist, digits: 1), label: '${now.month}월 km')),
-                  Expanded(child: StatColumn(value: '${runs.length}', label: '러닝 횟수')),
-                  Expanded(child: StatColumn(value: '${days.length}', label: '달린 날')),
+                  Expanded(
+                    child: StatColumn(
+                      value: Fmt.km(dist, digits: 1),
+                      unit: ' km',
+                      label: '${now.month}월 마일리지',
+                    ),
+                  ),
+                  Expanded(
+                    child: StatColumn(value: '${runs.length}', unit: '회', label: '러닝 횟수'),
+                  ),
+                  Expanded(
+                    child: StatColumn(value: '${days.length}', unit: '일', label: '달린 날'),
+                  ),
+                  Expanded(
+                    child: StatColumn(value: Fmt.minutes(time), label: '총 시간'),
+                  ),
                 ],
               ),
             );
@@ -425,19 +645,299 @@ class _MonthSummary extends StatelessWidget {
   }
 }
 
+/// 오늘 러닝 참고 정보: 지역 / 기온 / 날씨 / 미세먼지
+class _WeatherCard extends StatefulWidget {
+  const _WeatherCard();
+
+  @override
+  State<_WeatherCard> createState() => _WeatherCardState();
+}
+
+class _WeatherCardState extends State<_WeatherCard>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    WeatherService.instance.refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) WeatherService.instance.refresh();
+  }
+
+  Color _dustColor(DustGrade? g) => switch (g) {
+    DustGrade.good => AppColors.route,
+    DustGrade.normal => AppColors.gold,
+    DustGrade.bad => const Color(0xFFFF9800),
+    DustGrade.veryBad => AppColors.danger,
+    null => AppColors.textSecondary,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<WeatherState>(
+      valueListenable: WeatherService.instance.state,
+      builder: (_, s, _) {
+        final info = s.info;
+        return Container(
+          width: double.infinity,
+          margin: const EdgeInsets.fromLTRB(20, 10, 20, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: info != null ? _content(info) : _placeholder(s),
+        );
+      },
+    );
+  }
+
+  Widget _placeholder(WeatherState s) {
+    final loading =
+        s.status == WeatherStatus.loading || s.status == WeatherStatus.idle;
+    return InkWell(
+      onTap: loading
+          ? null
+          : () => WeatherService.instance.refresh(force: true),
+      child: SizedBox(
+        height: 135,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (loading)
+              const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              const Icon(
+                Icons.refresh,
+                size: 18,
+                color: AppColors.textSecondary,
+              ),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                loading
+                    ? '오늘의 러닝 날씨를 불러오는 중...'
+                    : '${s.message ?? '날씨 정보를 불러오지 못했어요'} (눌러서 다시 시도)',
+                style: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _content(WeatherInfo w) {
+    final (emoji, desc) = w.condition;
+    return InkWell(
+      onTap: () => WeatherService.instance.refresh(force: true),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(
+                Icons.place_rounded,
+                size: 14,
+                color: AppColors.textSecondary,
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: Text(
+                  w.region ?? '현재 위치',
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: AppColors.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Text(
+                '오늘의 러닝 날씨',
+                style: TextStyle(
+                  color: AppColors.neon.withValues(alpha: 0.9),
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Text(emoji, style: const TextStyle(fontSize: 34)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${w.tempC.round()}°',
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      '$desc · 체감 ${w.feelsLikeC.round()}°',
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: AppColors.textSecondary,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              _dustChip('미세먼지', w.pm10Grade, w.pm10),
+              const SizedBox(width: 8),
+              _dustChip('초미세', w.pm25Grade, w.pm25),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              _mini(Icons.water_drop_outlined, '습도 ${w.humidity}%'),
+              const SizedBox(width: 14),
+              _mini(Icons.air, '바람 ${w.windMps.toStringAsFixed(1)}m/s'),
+              if (w.rainProbability != null) ...[
+                const SizedBox(width: 14),
+                _mini(Icons.umbrella_outlined, '강수 ${w.rainProbability}%'),
+              ],
+            ],
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.neon.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              w.advice,
+              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _dustChip(String label, DustGrade? grade, double? value) {
+    final color = _dustColor(grade);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 10),
+        ),
+        const SizedBox(height: 2),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            grade?.label ?? '-',
+            style: TextStyle(
+              color: color,
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ),
+        if (value != null)
+          Text(
+            '${value.round()}㎍/㎥',
+            style: const TextStyle(
+              color: AppColors.textSecondary,
+              fontSize: 10,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _mini(IconData icon, String text) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 14, color: AppColors.textSecondary),
+      const SizedBox(width: 4),
+      Text(
+        text,
+        style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
+      ),
+    ],
+  );
+}
+
 class StatColumn extends StatelessWidget {
-  const StatColumn({super.key, required this.value, required this.label});
+  const StatColumn({super.key, required this.value, this.unit, required this.label});
   final String value;
+  final String? unit;
   final String label;
 
   @override
   Widget build(BuildContext context) => Column(
+    children: [
+      Row(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
-          Text(value, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppColors.neon)),
-          const SizedBox(height: 2),
-          Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+          Flexible(
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w900,
+                  color: AppColors.neon,
+                ),
+              ),
+            ),
+          ),
+          if (unit != null)
+            Text(
+              unit!,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.textSecondary,
+              ),
+            ),
         ],
-      );
+      ),
+      const SizedBox(height: 2),
+      Text(
+        label,
+        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+      ),
+    ],
+  );
 }
 
 class _BottomBar extends StatelessWidget {
@@ -461,7 +961,10 @@ class _BottomBar extends StatelessWidget {
               children: [
                 Icon(Icons.home_rounded, color: AppColors.neon),
                 SizedBox(width: 10),
-                Text('홈 · 지난 러닝 기록', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                Text(
+                  '홈 · 지난 러닝 기록',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+                ),
                 SizedBox(width: 6),
                 Icon(Icons.chevron_right, color: AppColors.textSecondary),
               ],

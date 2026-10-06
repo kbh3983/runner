@@ -23,6 +23,7 @@ class TreadmillScreen extends StatefulWidget {
 class _TreadmillScreenState extends State<TreadmillScreen> {
   final _distCtrl = TextEditingController();
   final _timeCtrl = TextEditingController();
+  final _secCtrl = TextEditingController();
   File? _image;
   bool _saving = false;
 
@@ -30,6 +31,7 @@ class _TreadmillScreenState extends State<TreadmillScreen> {
   void dispose() {
     _distCtrl.dispose();
     _timeCtrl.dispose();
+    _secCtrl.dispose();
     super.dispose();
   }
 
@@ -44,13 +46,18 @@ class _TreadmillScreenState extends State<TreadmillScreen> {
   Future<void> _save() async {
     final distText = _distCtrl.text.replaceAll(',', '.');
     final distKm = double.tryParse(distText);
-    final timeMin = int.tryParse(_timeCtrl.text);
+    final timeMin = int.tryParse(_timeCtrl.text) ?? 0;
+    final timeSec = int.tryParse(_secCtrl.text) ?? 0;
 
     if (distKm == null || distKm <= 0) {
       _err('거리를 올바르게 입력해주세요.');
       return;
     }
-    if (timeMin == null || timeMin <= 0) {
+    if (timeSec >= 60) {
+      _err('초는 0~59 사이로 입력해주세요.');
+      return;
+    }
+    if (timeMin * 60 + timeSec <= 0) {
       _err('시간을 올바르게 입력해주세요.');
       return;
     }
@@ -67,7 +74,7 @@ class _TreadmillScreenState extends State<TreadmillScreen> {
       final savedImage = await _image!.copy(p.join(dir.path, fileName));
       final relPath = 'treadmill/$fileName';
 
-      final durationMs = timeMin * 60 * 1000;
+      final durationMs = (timeMin * 60 + timeSec) * 1000;
       final distanceM = distKm * 1000;
 
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -127,16 +134,36 @@ class _TreadmillScreenState extends State<TreadmillScreen> {
               ),
             ),
             const SizedBox(height: 24),
-            TextField(
-              controller: _timeCtrl,
-              keyboardType: TextInputType.number,
-              inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
-              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              decoration: const InputDecoration(
-                labelText: '달린 시간 (분)',
-                hintText: '예: 30',
-                suffixText: '분',
-              ),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _timeCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(4)],
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    decoration: const InputDecoration(
+                      labelText: '달린 시간 (분)',
+                      hintText: '예: 30',
+                      suffixText: '분',
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: TextField(
+                    controller: _secCtrl,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(2)],
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    decoration: const InputDecoration(
+                      labelText: '초',
+                      hintText: '예: 25',
+                      suffixText: '초',
+                    ),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 32),
             const Text('인증샷 (필수)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
