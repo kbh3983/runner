@@ -6,7 +6,9 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 
 import '../config/app_config.dart';
 import '../core/geo.dart';
+import '../core/route_smoother.dart';
 import '../theme/app_theme.dart';
+import 'map_marker_helper.dart';
 
 class RouteLine {
   final String id;
@@ -14,30 +16,41 @@ class RouteLine {
   final Color color;
   final int width;
 
-  const RouteLine({required this.id, required this.segments, required this.color, this.width = 6});
+  const RouteLine({
+    required this.id,
+    required this.segments,
+    required this.color,
+    this.width = 4,
+  });
 
   int get pointCount => segments.fold(0, (s, e) => s + e.length);
 }
 
 /// 완료된 러닝 경로를 보여주는 지도.
-/// 경로가 화면에 꽉 차도록 맞춘 뒤, 필요하면 스냅샷(섬네일/기록증)을 찍는다.
+/// 페이스별 히트맵 컬러, 1km 2km 분할 뱃지, 출발/도착 커스텀 마커 지원.
 class RouteMap extends StatefulWidget {
   const RouteMap({
     super.key,
-    required this.lines,
+    this.lines = const [],
+    this.coloredSegments = const [],
+    this.kmPositions = const {},
     this.markers = const {},
     this.interactive = true,
     this.onSnapshot,
     this.padding = 48,
     this.showStartEnd = true,
+    this.showKmMarkers = true,
   });
 
   final List<RouteLine> lines;
+  final List<ColoredSegment> coloredSegments;
+  final Map<int, LatLng> kmPositions;
   final Set<Marker> markers;
   final bool interactive;
   final FutureOr<void> Function(Uint8List png)? onSnapshot;
   final double padding;
   final bool showStartEnd;
+  final bool showKmMarkers;
 
   @override
   State<RouteMap> createState() => RouteMapState();
@@ -48,14 +61,65 @@ class RouteMapState extends State<RouteMap> {
   bool _snapshotTaken = false;
   bool _mapReady = false;
 
-  List<LatLng> get _allPoints => widget.lines.expand((l) => l.segments.expand((s) => s)).toList();
+  BitmapDescriptor? _startIcon;
+  BitmapDescriptor? _endIcon;
+  final Map<int, BitmapDescriptor> _kmIcons = {};
+
+  List<LatLng> get _allPoints {
+    if (widget.coloredSegments.isNotEmpty) {
+      return widget.coloredSegments.expand((s) => s.points).toList();
+    }
+    return widget.lines.expand((l) => l.segments.expand((s) => s)).toList();
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadCustomMarkers();
+  }
 
   @override
   void didUpdateWidget(covariant RouteMap oldWidget) {
     super.didUpdateWidget(oldWidget);
-    final oldCount = oldWidget.lines.fold<int>(0, (s, l) => s + l.pointCount);
-    final newCount = widget.lines.fold<int>(0, (s, l) => s + l.pointCount);
+    if (oldWidget.kmPositions.keys.toSet() != widget.kmPositions.keys.toSet() ||
+        oldWidget.showStartEnd != widget.showStartEnd) {
+      _loadCustomMarkers();
+    }
+    final oldCount = oldWidget.lines.fold<int>(0, (s, l) => s + l.pointCount) +
+        oldWidget.coloredSegments.fold<int>(0, (s, e) => s + e.points.length);
+    final newCount = widget.lines.fold<int>(0, (s, l) => s + l.pointCount) +
+        widget.coloredSegments.fold<int>(0, (s, e) => s + e.points.length);
     if (oldCount != newCount) _fit();
+  }
+
+  Future<void> _loadCustomMarkers() async {
+    try {
+      if (widget.showStartEnd) {
+        final start = await MapMarkerHelper.getStartMarker();
+        final end = await MapMarkerHelper.getEndMarker();
+        if (mounted) {
+          setState(() {
+            _startIcon = start;
+            _endIcon = end;
+          });
+        }
+      }
+
+      if (widget.showKmMarkers && widget.kmPositions.isNotEmpty) {
+        for (final km in widget.kmPositions.keys) {
+          if (!_kmIcons.containsKey(km)) {
+            final icon = await MapMarkerHelper.getKmMarker(km);
+            if (mounted) {
+              setState(() {
+                _kmIcons[km] = icon;
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Failed to load custom markers: $e');
+    }
   }
 
   Future<void> _fit() async {
@@ -81,7 +145,7 @@ class RouteMapState extends State<RouteMap> {
     if (!mounted) return;
     await _fit();
     if (widget.onSnapshot != null && !_snapshotTaken) {
-      // 타일이 로드될 시간을 준다
+      // 마커 및 타일이 렌더링될 시간 대기
       await Future.delayed(const Duration(milliseconds: 1800));
       await takeSnapshot();
     }
@@ -114,44 +178,90 @@ class RouteMapState extends State<RouteMap> {
     }
     final pts = _allPoints;
     final polylines = <Polyline>{};
-    for (final line in widget.lines) {
-      for (var i = 0; i < line.segments.length; i++) {
-        if (line.segments[i].length < 2) continue;
+
+    // 1) 페이스별 히트맵 세그먼트가 있으면 우선 렌더링
+    if (widget.coloredSegments.isNotEmpty) {
+      for (var i = 0; i < widget.coloredSegments.length; i++) {
+        final seg = widget.coloredSegments[i];
+        if (seg.points.length < 2) continue;
         polylines.add(Polyline(
-          polylineId: PolylineId('${line.id}_$i'),
-          points: line.segments[i],
-          color: line.color,
-          width: line.width,
+          polylineId: PolylineId('heat_$i'),
+          points: seg.points,
+          color: seg.color,
+          width: 4,
           jointType: JointType.round,
           startCap: Cap.roundCap,
           endCap: Cap.roundCap,
+          zIndex: 2,
         ));
       }
+    } else {
+      // 2) 기본 lines 렌더링
+      for (final line in widget.lines) {
+        for (var i = 0; i < line.segments.length; i++) {
+          if (line.segments[i].length < 2) continue;
+          polylines.add(Polyline(
+            polylineId: PolylineId('${line.id}_$i'),
+            points: line.segments[i],
+            color: line.color,
+            width: line.width,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            zIndex: 2,
+          ));
+        }
+      }
     }
+
     final markers = {...widget.markers};
-    if (widget.showStartEnd && pts.isNotEmpty && widget.lines.length == 1) {
+
+    // 3) 1km, 2km 등 킬로미터 마커 뱃지 추가
+    if (widget.showKmMarkers && widget.kmPositions.isNotEmpty) {
+      widget.kmPositions.forEach((km, pos) {
+        final icon = _kmIcons[km];
+        if (icon != null) {
+          markers.add(Marker(
+            markerId: MarkerId('km_$km'),
+            position: pos,
+            icon: icon,
+            anchor: const Offset(0.5, 0.5),
+            zIndexInt: 5,
+          ));
+        }
+      });
+    }
+
+    // 4) 출발 / 도착 커스텀 원형 마커
+    if (widget.showStartEnd && pts.isNotEmpty) {
       if (pts.length == 1) {
         markers.add(Marker(
           markerId: const MarkerId('single'),
           position: pts.first,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
-          infoWindow: const InfoWindow(title: '기록된 위치'),
+          icon: _endIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          anchor: const Offset(0.5, 0.5),
+          zIndexInt: 10,
         ));
       } else {
         markers.add(Marker(
           markerId: const MarkerId('start'),
           position: pts.first,
-          icon: BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          icon: _startIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          anchor: const Offset(0.5, 0.5),
           infoWindow: const InfoWindow(title: '출발'),
+          zIndexInt: 10,
         ));
         markers.add(Marker(
           markerId: const MarkerId('end'),
           position: pts.last,
-          icon: BitmapDescriptor.defaultMarkerWithHue(75),
+          icon: _endIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueRed),
+          anchor: const Offset(0.5, 0.5),
           infoWindow: const InfoWindow(title: '도착'),
+          zIndexInt: 10,
         ));
       }
     }
+
     final initial = pts.isNotEmpty ? pts.first : const LatLng(37.5665, 126.9780);
     return Stack(
       children: [

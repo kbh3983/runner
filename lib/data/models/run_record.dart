@@ -19,16 +19,34 @@ class KmSplit {
   final int movingMs; // 이동시간 기준 통과 시점
   final int? raceMs; // 단체 러닝 공통 출발 시각 기준 통과 시점
   final double paceSec; // 이 1km 구간 페이스 (sec/km)
+  final double? lat;
+  final double? lng;
 
-  const KmSplit({required this.km, required this.movingMs, this.raceMs, required this.paceSec});
+  const KmSplit({
+    required this.km,
+    required this.movingMs,
+    this.raceMs,
+    required this.paceSec,
+    this.lat,
+    this.lng,
+  });
 
-  Map<String, dynamic> toMap() => {'km': km, 'movingMs': movingMs, 'raceMs': raceMs, 'paceSec': paceSec};
+  Map<String, dynamic> toMap() => {
+        'km': km,
+        'movingMs': movingMs,
+        'raceMs': raceMs,
+        'paceSec': paceSec,
+        if (lat != null) 'lat': lat,
+        if (lng != null) 'lng': lng,
+      };
 
   factory KmSplit.fromMap(Map m) => KmSplit(
         km: (m['km'] as num).toInt(),
         movingMs: (m['movingMs'] as num).toInt(),
         raceMs: (m['raceMs'] as num?)?.toInt(),
         paceSec: (m['paceSec'] as num).toDouble(),
+        lat: (m['lat'] as num?)?.toDouble(),
+        lng: (m['lng'] as num?)?.toDouble(),
       );
 }
 
@@ -117,6 +135,7 @@ class RunRecord {
   SyncStatus syncStatus;
   List<Participant> participants;
   RemotePath? remotePath;
+  String? region;
   int updatedAt;
 
   RunRecord({
@@ -145,6 +164,7 @@ class RunRecord {
     this.syncStatus = SyncStatus.pending,
     List<Participant>? participants,
     this.remotePath,
+    this.region,
     int? updatedAt,
   })  : splits = splits ?? [],
         timeline = timeline ?? [],
@@ -179,6 +199,7 @@ class RunRecord {
         'sync_status': syncStatus.name,
         'participants_json': jsonEncode(participants.map((e) => e.toMap()).toList()),
         'remote_path_json': remotePath?.toJson(),
+        'region': region,
         'updated_at': updatedAt,
       };
 
@@ -215,6 +236,7 @@ class RunRecord {
       syncStatus: SyncStatus.values.byName((r['sync_status'] as String?) ?? 'pending'),
       participants: list('participants_json', Participant.fromMap),
       remotePath: RemotePath.fromJson(r['remote_path_json'] as String?),
+      region: r['region'] as String?,
       updatedAt: r['updated_at'] as int?,
     );
   }

@@ -117,8 +117,7 @@ class _CertificateSheetState extends State<_CertificateSheet> {
             key: _boundary,
             child: AspectRatio(
               aspectRatio: 1,
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(20),
+              child: ClipRect(
                 child: Stack(
                   fit: StackFit.expand,
                   children: [

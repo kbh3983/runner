@@ -3,7 +3,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/format.dart';
 import '../../data/models/run_record.dart';
+import '../../services/leaderboard_service.dart';
+import '../../services/point_service.dart';
+import '../../services/region_service.dart';
 import '../../theme/app_theme.dart';
+import '../leaderboard/leaderboard_screen.dart';
+import '../points/points_screen.dart';
 
 enum _Period {
   w4('4주', 28),
@@ -17,7 +22,7 @@ enum _Period {
 }
 
 /// 러닝 통계: 항목별 카드 모음.
-/// - 기간 선택(4주/3개월/1년/전체)이 적용되는 카드: 요약, 페이스 추이, 평균, 요일/시간대/거리/유형 분포, 고도·속도
+/// - 기간 선택(4주/3개월/1년/전체)이 적용되는 카드: 요약, 페이스 추이, 평균, 요일/시간대/거리/유형 분포, 활동 지역, 고도·속도
 /// - 항상 전체 기록 기준인 카드: 주간/월간 마일리지, 개인 최고 기록, 연속 러닝
 class StatsView extends StatefulWidget {
   const StatsView({super.key, required this.runs, required this.onOpenRun});
@@ -33,6 +38,13 @@ class StatsView extends StatefulWidget {
 class _StatsViewState extends State<StatsView>
     with AutomaticKeepAliveClientMixin {
   _Period _period = _Period.m3;
+
+  @override
+  void initState() {
+    super.initState();
+    // 지역 정보가 없는 과거 러닝에 대해 백그라운드 역지오코딩 수행
+    RegionService.instance.backfillMissingRegions();
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -75,6 +87,7 @@ class _StatsViewState extends State<StatsView>
       children: [
         _periodSelector(),
         const SizedBox(height: 14),
+        _monthlyRankingCard(now),
         if (runs.isEmpty)
           const _StatCard(
             icon: Icons.insights,
@@ -102,6 +115,7 @@ class _StatsViewState extends State<StatsView>
           _distanceBucketCard(runs),
           _elevationCard(runs),
           _modeCard(runs),
+          _regionCard(runs),
         ],
       ],
     );
@@ -124,6 +138,274 @@ class _StatsViewState extends State<StatsView>
       onSelectionChanged: (s) => setState(() => _period = s.first),
     ),
   );
+
+  // ---------------------------------------------------------------- 월간 랭킹
+
+  Widget _monthlyRankingCard(DateTime now) {
+    final currentKey = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+    final prevMonthDate = DateTime(now.year, now.month - 1, 1);
+    final prevKey = '${prevMonthDate.year}-${prevMonthDate.month.toString().padLeft(2, '0')}';
+
+    return FutureBuilder<List<MonthlyLeaderboard>>(
+      future: Future.wait([
+        LeaderboardService.instance.getMonthlyLeaderboard(currentKey),
+        LeaderboardService.instance.getMonthlyLeaderboard(prevKey),
+      ]),
+      builder: (context, snapshot) {
+        final currentLb = snapshot.data != null ? snapshot.data![0] : null;
+        final prevLb = snapshot.data != null ? snapshot.data![1] : null;
+        final myCur = currentLb?.myEntry;
+        final myPrev = prevLb?.myEntry;
+
+        return InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const LeaderboardScreen()),
+            );
+          },
+          child: _StatCard(
+            icon: Icons.emoji_events_rounded,
+            title: '월간 마일리지 랭킹',
+            caption: '혼자/같이 달린 모든 거리가 합산된 앱 전체 순위예요',
+            trailing: const Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  '전체 랭킹',
+                  style: TextStyle(
+                    color: AppColors.neon,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
+                ),
+                SizedBox(width: 2),
+                Icon(Icons.chevron_right, size: 16, color: AppColors.neon),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Column(
+                children: [
+                  Row(
+                    children: [
+                  // 이번 달
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            const Color(0xFFFFD700).withValues(alpha: 0.12),
+                            AppColors.surfaceHigh,
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: const Color(0xFFFFD700).withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '${now.month}월 (진행중)',
+                                style: const TextStyle(
+                                  color: Color(0xFFFFD700),
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const Spacer(),
+                              const Icon(Icons.bolt_rounded, size: 14, color: Color(0xFFFFD700)),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                myCur != null ? '${myCur.rank}' : '-',
+                                style: const TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              const Text(
+                                ' 위',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                myCur != null ? '${Fmt.km(myCur.distanceM, digits: 1)} km' : '0.0 km',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.neon,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            currentLb != null && myCur != null
+                                ? '상위 ${((myCur.rank / currentLb.totalParticipants) * 100).toStringAsFixed(1)}% (${currentLb.totalParticipants}명)'
+                                : '달리고 순위를 올려보세요! 🏃',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+
+                  // 지난 달 (마감)
+                  Expanded(
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.surfaceHigh,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: AppColors.outline.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Text(
+                                '${prevMonthDate.month}월 (마감)',
+                                style: const TextStyle(
+                                  color: AppColors.textSecondary,
+                                  fontWeight: FontWeight.w800,
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const Spacer(),
+                              const Icon(Icons.lock_clock_rounded, size: 12, color: AppColors.textSecondary),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.baseline,
+                            textBaseline: TextBaseline.alphabetic,
+                            children: [
+                              Text(
+                                myPrev != null ? '${myPrev.rank}' : '-',
+                                style: const TextStyle(
+                                  fontSize: 26,
+                                  fontWeight: FontWeight.w900,
+                                  color: AppColors.textPrimary,
+                                ),
+                              ),
+                              const Text(
+                                ' 위',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.textSecondary,
+                                ),
+                              ),
+                              const Spacer(),
+                              Text(
+                                myPrev != null ? '${Fmt.km(myPrev.distanceM, digits: 1)} km' : '0.0 km',
+                                style: const TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w900,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            prevLb != null && myPrev != null
+                                ? '최종 마감 (${prevLb.totalParticipants}명)'
+                                : '마감 기록 없음',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: AppColors.textSecondary,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const PointsScreen()),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: const Color(0xFFFFD700).withValues(alpha: 0.2),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text('🪙', style: TextStyle(fontSize: 14)),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ValueListenableBuilder<int>(
+                          valueListenable: PointService.instance.balance,
+                          builder: (context, pts, _) => Text(
+                            '러닝 게임머니: $pts P',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: Color(0xFFFFD700),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const Text(
+                        '미션 & 내역',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.neon,
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      const Icon(Icons.chevron_right, size: 14, color: AppColors.neon),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+      },
+    );
+  }
 
   // ---------------------------------------------------------------- 요약
 
@@ -611,6 +893,51 @@ class _StatsViewState extends State<StatsView>
       ),
     );
   }
+
+  Widget _regionCard(List<RunRecord> runs) {
+    final stats = <String, ({int count, double distanceM, int durationMs})>{};
+    for (final r in runs) {
+      final reg = (r.region != null && r.region!.isNotEmpty)
+          ? r.region!
+          : (r.mode == RunMode.treadmill ? '실내 러닝머신' : '위치 확인 중');
+      final cur = stats[reg] ?? (count: 0, distanceM: 0.0, durationMs: 0);
+      stats[reg] = (
+        count: cur.count + 1,
+        distanceM: cur.distanceM + r.distanceM,
+        durationMs: cur.durationMs + r.durationMs,
+      );
+    }
+
+    if (stats.isEmpty) return const SizedBox.shrink();
+
+    final sorted = stats.entries.toList()
+      ..sort((a, b) => b.value.count.compareTo(a.value.count));
+
+    final totalRuns = runs.length;
+    final maxCount = sorted.first.value.count;
+
+    return _StatCard(
+      icon: Icons.location_on_rounded,
+      title: '활동 지역',
+      caption: '${_period.label} 기준 · 총 ${stats.length}개 지역',
+      child: Column(
+        children: [
+          for (var i = 0; i < sorted.length; i++) ...[
+            if (i > 0) const SizedBox(height: 12),
+            _RegionStatRow(
+              rank: i + 1,
+              region: sorted[i].key,
+              count: sorted[i].value.count,
+              distanceM: sorted[i].value.distanceM,
+              durationMs: sorted[i].value.durationMs,
+              ratio: maxCount > 0 ? sorted[i].value.count / maxCount : 0.0,
+              percent: totalRuns > 0 ? (sorted[i].value.count / totalRuns * 100).round() : 0,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
 }
 
 // ====================================================================== 공용 위젯
@@ -971,6 +1298,117 @@ class _HBars extends StatelessWidget {
               ],
             ),
           ),
+      ],
+    );
+  }
+}
+
+class _RegionStatRow extends StatelessWidget {
+  const _RegionStatRow({
+    required this.rank,
+    required this.region,
+    required this.count,
+    required this.distanceM,
+    required this.durationMs,
+    required this.ratio,
+    required this.percent,
+  });
+
+  final int rank;
+  final String region;
+  final int count;
+  final double distanceM;
+  final int durationMs;
+  final double ratio;
+  final int percent;
+
+  Color get _rankColor => switch (rank) {
+    1 => AppColors.neon,
+    2 => AppColors.silver,
+    3 => AppColors.bronze,
+    _ => AppColors.textSecondary,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final pace = distanceM > 0 ? (durationMs / 1000) / (distanceM / 1000) : null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 22,
+              height: 22,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: _rankColor.withValues(alpha: 0.18),
+                shape: BoxShape.circle,
+                border: Border.all(color: _rankColor, width: 1.2),
+              ),
+              child: Text(
+                '$rank',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  color: _rankColor,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                region,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                  color: AppColors.textPrimary,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$count회 ($percent%)',
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: AppColors.neon,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: ratio),
+            duration: const Duration(milliseconds: 500),
+            curve: Curves.easeOutCubic,
+            builder: (_, t, _) => LinearProgressIndicator(
+              value: t,
+              minHeight: 6,
+              color: rank == 1 ? AppColors.neon : AppColors.neon.withValues(alpha: 0.45),
+              backgroundColor: AppColors.surfaceHigh,
+            ),
+          ),
+        ),
+        const SizedBox(height: 5),
+        Row(
+          children: [
+            Text(
+              '누적 ${Fmt.km(distanceM, digits: 1)} km',
+              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            ),
+            const Spacer(),
+            if (pace != null)
+              Text(
+                '평균 페이스 ${Fmt.pace(pace)} /km',
+                style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+              ),
+          ],
+        ),
       ],
     );
   }

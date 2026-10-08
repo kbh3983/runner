@@ -12,6 +12,13 @@ import '../data/local/local_db.dart';
 import '../data/models/gps_point.dart';
 import '../data/models/run_record.dart';
 
+enum SyncResult {
+  success,
+  notLoggedIn,
+  noPending,
+  failed,
+}
+
 /// Local DB → Firestore 동기화.
 ///
 /// * 러닝 종료 직후 시도하고, 실패하면 `sync_status = pending` 으로 남겨둔다.
@@ -35,6 +42,7 @@ class SyncService {
     syncAll();
   }
 
+  /// 백그라운드 자동 동기화
   Future<void> syncAll() async {
     final uid = FirebaseAuth.instance.currentUser?.uid;
     if (uid == null) return;
@@ -64,6 +72,70 @@ class SyncService {
       } while (_again);
     } finally {
       _running = false;
+      syncing.value = false;
+    }
+  }
+
+  /// 사용자가 수동으로 전체 동기화를 실행할 때 호출 (결과 상태 반환)
+  Future<SyncResult> syncAllManual() async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return SyncResult.notLoggedIn;
+
+    final runs = await LocalDb.instance.getRunsToSync(uid);
+    if (runs.isEmpty) return SyncResult.noPending;
+
+    _running = true;
+    syncing.value = true;
+    bool anySuccess = false;
+    bool anyFailed = false;
+
+    try {
+      for (final r in runs) {
+        try {
+          if (r.syncStatus == SyncStatus.pending) {
+            await _upload(r);
+          } else if (r.syncStatus == SyncStatus.memoPending) {
+            await _uploadMemos(r.id);
+          }
+          await LocalDb.instance.setSyncStatus(r.id, SyncStatus.synced);
+          anySuccess = true;
+        } catch (e) {
+          debugPrint('manual sync failed for ${r.id}: $e');
+          anyFailed = true;
+          break;
+        }
+      }
+    } finally {
+      _running = false;
+      syncing.value = false;
+    }
+
+    if (anyFailed && !anySuccess) return SyncResult.failed;
+    return SyncResult.success;
+  }
+
+  /// 특정 러닝 1건에 대한 수동 동기화
+  Future<SyncResult> syncSingleRun(String runId) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) return SyncResult.notLoggedIn;
+
+    final r = await LocalDb.instance.getRun(runId);
+    if (r == null) return SyncResult.failed;
+    if (r.syncStatus == SyncStatus.synced) return SyncResult.noPending;
+
+    syncing.value = true;
+    try {
+      if (r.syncStatus == SyncStatus.pending) {
+        await _upload(r);
+      } else if (r.syncStatus == SyncStatus.memoPending) {
+        await _uploadMemos(r.id);
+      }
+      await LocalDb.instance.setSyncStatus(r.id, SyncStatus.synced);
+      return SyncResult.success;
+    } catch (e) {
+      debugPrint('syncSingleRun failed for $runId: $e');
+      return SyncResult.failed;
+    } finally {
       syncing.value = false;
     }
   }

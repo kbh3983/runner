@@ -51,7 +51,7 @@ class Fmt {
   static String date(int epochMs) =>
       DateFormat('yyyy.MM.dd (E)', 'ko_KR').format(DateTime.fromMillisecondsSinceEpoch(epochMs));
 
-  static String dateTime(int epochMs) => DateFormat('yyyy.MM.dd (E) HH:mm', 'ko_KR')
+  static String dateTime(int epochMs) => DateFormat('yyyy.MM.dd (E) a h:mm', 'ko_KR')
       .format(DateTime.fromMillisecondsSinceEpoch(epochMs));
 
   static String time(int epochMs) =>

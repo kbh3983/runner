@@ -66,8 +66,8 @@ class AppConfig {
   /// 사람이 달릴 수 없는 속도 (m/s) — 튀는 GPS 값 제거용
   static const maxSpeedMps = 12.0;
 
-  /// GPS distanceFilter (m) — 매초 저장하지 않도록 최소 이동거리 기준으로 수신
-  static const gpsDistanceFilterM = 4;
+  /// GPS distanceFilter (m) — 실시간 위치 업데이트를 위해 1m 기준으로 수신
+  static const gpsDistanceFilterM = 1;
 
   /// 타임라인(시간별 페이스) 샘플 간격
   static const timelineInterval = Duration(seconds: 30);

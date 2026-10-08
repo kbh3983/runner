@@ -11,6 +11,7 @@ import '../data/models/run_record.dart';
 import '../services/auth_service.dart';
 import '../services/deep_link_service.dart';
 import '../services/party_service.dart';
+import '../services/point_service.dart';
 import '../services/push_service.dart';
 import '../services/run_tracker.dart';
 import '../services/server_clock.dart';
@@ -18,7 +19,9 @@ import '../services/sync_service.dart';
 import '../services/weather_service.dart';
 import '../theme/app_theme.dart';
 import 'history/history_screen.dart';
+import 'leaderboard/leaderboard_screen.dart';
 import 'party/party_sheets.dart';
+import 'points/points_screen.dart';
 import 'run/run_finish_screen.dart';
 import 'run/run_screen.dart';
 import 'run/start_options_sheet.dart';
@@ -43,6 +46,7 @@ class _MainScreenState extends State<MainScreen> {
   @override
   void initState() {
     super.initState();
+    PointService.instance.init();
     _partySub = PartyService.instance.myActiveParties(uid).listen((list) {
       setState(() => _parties = list);
       _checkAutoStart(list);
@@ -382,6 +386,42 @@ class _MainScreenState extends State<MainScreen> {
                   )
                 : const SizedBox.shrink(),
           ),
+          // 러닝 게임머니 포인트 뱃지
+          ValueListenableBuilder<int>(
+            valueListenable: PointService.instance.balance,
+            builder: (context, pts, _) => InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const PointsScreen()),
+              ),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                margin: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFD700).withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: const Color(0xFFFFD700).withValues(alpha: 0.4),
+                  ),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text('🪙', style: TextStyle(fontSize: 13)),
+                    const SizedBox(width: 4),
+                    Text(
+                      '$pts P',
+                      style: const TextStyle(
+                        color: Color(0xFFFFD700),
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
           PopupMenuButton<String>(
             icon: CircleAvatar(
               radius: 16,
@@ -477,6 +517,9 @@ class _MainScreenState extends State<MainScreen> {
               onHome: () => Navigator.of(
                 context,
               ).push(MaterialPageRoute(builder: (_) => const HistoryScreen())),
+              onLeaderboard: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute(builder: (_) => const LeaderboardScreen())),
             ),
           ],
         ),
@@ -941,36 +984,74 @@ class StatColumn extends StatelessWidget {
 }
 
 class _BottomBar extends StatelessWidget {
-  const _BottomBar({required this.onHome});
+  const _BottomBar({required this.onHome, required this.onLeaderboard});
   final VoidCallback onHome;
+  final VoidCallback onLeaderboard;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
-      child: Material(
-        color: AppColors.surface,
-        borderRadius: BorderRadius.circular(20),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: onHome,
-          child: const SizedBox(
-            height: 60,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.home_rounded, color: AppColors.neon),
-                SizedBox(width: 10),
-                Text(
-                  '홈 · 지난 러닝 기록',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
+      child: Row(
+        children: [
+          Expanded(
+            child: Material(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: onHome,
+                child: const SizedBox(
+                  height: 56,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.calendar_month_rounded, color: AppColors.neon, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        '러닝 기록',
+                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14),
+                      ),
+                    ],
+                  ),
                 ),
-                SizedBox(width: 6),
-                Icon(Icons.chevron_right, color: AppColors.textSecondary),
-              ],
+              ),
             ),
           ),
-        ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Material(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(20),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(20),
+                onTap: onLeaderboard,
+                child: Container(
+                  height: 56,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFFFFD700).withValues(alpha: 0.35)),
+                  ),
+                  child: const Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.emoji_events_rounded, color: Color(0xFFFFD700), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        '월간 랭킹',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 14,
+                          color: Color(0xFFFFD700),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

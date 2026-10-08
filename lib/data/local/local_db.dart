@@ -22,15 +22,61 @@ class LocalDb {
 
   void _notify() => changes.value++;
 
-  Future<Database> get db async => _db ??= await _open();
+  bool _columnsEnsured = false;
+
+  Future<void> _ensureColumns(Database d) async {
+    if (_columnsEnsured) return;
+    try {
+      final info = await d.rawQuery('PRAGMA table_info(runs)');
+      final names = info.map((r) => r['name'] as String?).toSet();
+      if (!names.contains('region')) {
+        await d.execute('ALTER TABLE runs ADD COLUMN region TEXT');
+      }
+      await d.execute('''
+        CREATE TABLE IF NOT EXISTS point_history (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          points INTEGER NOT NULL,
+          type TEXT NOT NULL,
+          title TEXT NOT NULL,
+          description TEXT,
+          created_at INTEGER NOT NULL,
+          ref_id TEXT
+        )
+      ''');
+      await d.execute('CREATE INDEX IF NOT EXISTS idx_point_history_user ON point_history (user_id, created_at DESC)');
+      await d.execute('CREATE INDEX IF NOT EXISTS idx_point_history_ref ON point_history (ref_id)');
+      _columnsEnsured = true;
+    } catch (e) {
+      debugPrint('Error ensuring region column: $e');
+    }
+  }
+
+  Future<Database> get db async {
+    _db ??= await _open();
+    await _ensureColumns(_db!);
+    return _db!;
+  }
 
   Future<Database> _open() async {
     final dir = await getDatabasesPath();
-    return openDatabase(
+    return await openDatabase(
       p.join(dir, 'runtogether.db'),
-      version: 1,
+      version: 2,
       onConfigure: (db) async {
         await db.rawQuery('PRAGMA journal_mode=WAL');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 2) {
+          try {
+            await db.execute('ALTER TABLE runs ADD COLUMN region TEXT');
+          } catch (_) {}
+        }
+      },
+      onOpen: (db) async {
+        try {
+          await db.execute('ALTER TABLE runs ADD COLUMN region TEXT');
+        } catch (_) {}
       },
       onCreate: (db, version) async {
         await db.execute('''
@@ -60,6 +106,7 @@ class LocalDb {
             sync_status TEXT DEFAULT 'pending',
             participants_json TEXT,
             remote_path_json TEXT,
+            region TEXT,
             updated_at INTEGER
           )
         ''');
@@ -117,7 +164,23 @@ class LocalDb {
   Future<void> upsertRun(RunRecord run, {bool notify = true}) async {
     run.updatedAt = DateTime.now().millisecondsSinceEpoch;
     final d = await db;
-    await d.insert('runs', run.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+    try {
+      await d.insert('runs', run.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+    } catch (e) {
+      // 컬럼 누락 에러일 경우 즉시 ALTER TABLE 후 재시도
+      try {
+        await d.execute('ALTER TABLE runs ADD COLUMN region TEXT');
+        await d.insert('runs', run.toRow(), conflictAlgorithm: ConflictAlgorithm.replace);
+      } catch (retryErr) {
+        debugPrint('upsertRun fallback failed: $retryErr');
+        try {
+          final fallbackRow = run.toRow()..remove('region');
+          await d.insert('runs', fallbackRow, conflictAlgorithm: ConflictAlgorithm.replace);
+        } catch (fatalErr) {
+          debugPrint('upsertRun fatal fallback error: $fatalErr');
+        }
+      }
+    }
     if (notify) _notify();
   }
 
@@ -131,6 +194,12 @@ class LocalDb {
     final d = await db;
     final rows = await d.query('runs', columns: ['id'], where: 'id = ?', whereArgs: [id], limit: 1);
     return rows.isNotEmpty;
+  }
+
+  Future<List<RunRecord>> getAllRuns() async {
+    final d = await db;
+    final rows = await d.query('runs', orderBy: 'started_at DESC');
+    return rows.map(RunRecord.fromRow).toList();
   }
 
   /// 완료된 러닝 (최신순)
@@ -318,5 +387,58 @@ class LocalDb {
     final d = await db;
     final rows = await d.query('party_secrets', where: 'party_key = ?', whereArgs: [partyKey], limit: 1);
     return rows.isEmpty ? null : rows.first['password'] as String;
+  }
+
+  // ---------------------------------------------------------------- points
+
+  Future<void> insertPointHistory(Map<String, dynamic> row) async {
+    final d = await db;
+    await d.insert('point_history', row, conflictAlgorithm: ConflictAlgorithm.replace);
+    _notify();
+  }
+
+  Future<int> getTotalPoints(String userId) async {
+    final d = await db;
+    final res = await d.rawQuery(
+      'SELECT COALESCE(SUM(points), 0) as total FROM point_history WHERE user_id = ?',
+      [userId],
+    );
+    if (res.isEmpty) return 0;
+    return (res.first['total'] as num?)?.toInt() ?? 0;
+  }
+
+  Future<List<Map<String, dynamic>>> getPointHistory(String userId, {int limit = 100}) async {
+    final d = await db;
+    return await d.query(
+      'point_history',
+      where: 'user_id = ?',
+      whereArgs: [userId],
+      orderBy: 'created_at DESC',
+      limit: limit,
+    );
+  }
+
+  Future<bool> hasPointWithRefId(String refId) async {
+    final d = await db;
+    final rows = await d.query(
+      'point_history',
+      columns: ['id'],
+      where: 'ref_id = ?',
+      whereArgs: [refId],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<bool> hasPointWithTypeOnDate(String userId, String type, int startMs, int endMs) async {
+    final d = await db;
+    final rows = await d.query(
+      'point_history',
+      columns: ['id'],
+      where: 'user_id = ? AND type = ? AND created_at >= ? AND created_at <= ?',
+      whereArgs: [userId, type, startMs, endMs],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
   }
 }

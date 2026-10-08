@@ -6,12 +6,14 @@ import 'package:google_maps_flutter/google_maps_flutter.dart';
 import '../../config/app_config.dart';
 import '../../core/format.dart';
 import '../../core/party_ids.dart';
+import '../../core/route_smoother.dart';
 import '../../data/models/run_record.dart';
 import '../../services/auth_service.dart';
 import '../../services/run_tracker.dart';
 import '../../services/server_clock.dart';
 import '../../services/voice_service.dart';
 import '../../theme/app_theme.dart';
+import '../../widgets/map_marker_helper.dart';
 import '../../widgets/route_map.dart';
 import 'run_finish_screen.dart';
 
@@ -54,6 +56,9 @@ class _RunScreenState extends State<RunScreen> {
   bool _mapReady = false;
   StreamSubscription<FinishReason>? _finishSub;
 
+  BitmapDescriptor? _startIcon;
+  final Map<int, BitmapDescriptor> _kmIcons = {};
+
   // 카운트다운
   Timer? _cdTimer;
   int? _cdShown; // 화면에 보이는 숫자 (0 = GO)
@@ -65,6 +70,9 @@ class _RunScreenState extends State<RunScreen> {
     super.initState();
     tracker.addListener(_onTracker);
     _finishSub = tracker.onFinished.listen((_) => _goFinish());
+    MapMarkerHelper.getStartMarker().then((icon) {
+      if (mounted) setState(() => _startIcon = icon);
+    });
     RunTracker.currentLatLng().then((p) {
       if (mounted && p != null) setState(() => _initial = p);
     });
@@ -190,9 +198,20 @@ class _RunScreenState extends State<RunScreen> {
     final pos = tracker.position;
     if (_follow && pos != null && _map != null) {
       final now = DateTime.now().millisecondsSinceEpoch;
-      if (now - _lastCameraMove > 1000) {
+      // 실시간으로 부드럽게 카메라 추적 (600ms 주기)
+      if (now - _lastCameraMove > 600) {
         _lastCameraMove = now;
         _map!.animateCamera(CameraUpdate.newLatLng(pos));
+      }
+    }
+
+    // 신규 1km 마커 비동기 로딩
+    final splits = tracker.run?.splits ?? const [];
+    for (final s in splits) {
+      if (!_kmIcons.containsKey(s.km) && s.lat != null && s.lng != null) {
+        MapMarkerHelper.getKmMarker(s.km).then((icon) {
+          if (mounted) setState(() => _kmIcons[s.km] = icon);
+        });
       }
     }
   }
@@ -229,22 +248,96 @@ class _RunScreenState extends State<RunScreen> {
 
   Set<Polyline> _polylines() {
     final set = <Polyline>{};
+
     for (var i = 0; i < tracker.segments.length; i++) {
       final seg = tracker.segments[i];
       if (seg.length < 2) continue;
-      set.add(
-        Polyline(
-          polylineId: PolylineId('me_$i'),
-          points: List.of(seg),
-          color: AppColors.route,
-          width: 7,
-          jointType: JointType.round,
-          startCap: Cap.roundCap,
-          endCap: Cap.roundCap,
-          zIndex: 2,
-        ),
-      );
+
+      final paces = i < tracker.segmentPaces.length ? tracker.segmentPaces[i] : <double?>[];
+      // 스무딩 처리로 울퉁불퉁한 GPS 지터 제거 (직선 구간 보정)
+      final smoothed = RouteSmoother.smoothPoints(seg);
+
+      if (paces.isEmpty) {
+        set.add(
+          Polyline(
+            polylineId: PolylineId('me_${i}_0'),
+            points: smoothed,
+            color: AppColors.neon,
+            width: 4,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            zIndex: 2,
+          ),
+        );
+        continue;
+      }
+
+      // 페이스별 컬러 버킷팅 및 청킹
+      const numBuckets = 8;
+      int getBucket(double? pace) {
+        if (pace == null || pace <= 0) return numBuckets ~/ 2;
+        final t = ((480.0 - pace) / (480.0 - 240.0)).clamp(0.0, 1.0);
+        return (t * (numBuckets - 1)).round();
+      }
+
+      var currentBucket = getBucket(paces.first);
+      var currentChunk = <LatLng>[smoothed.first];
+      var paceSum = paces.first ?? 360.0;
+      var paceCount = 1;
+      var chunkIdx = 0;
+
+      for (var j = 1; j < smoothed.length; j++) {
+        final p = j < paces.length ? paces[j] : null;
+        final b = getBucket(p);
+        final coord = smoothed[j];
+
+        if (b != currentBucket && currentChunk.length >= 2) {
+          currentChunk.add(coord);
+          final avgP = paceSum / paceCount;
+          set.add(
+            Polyline(
+              polylineId: PolylineId('me_${i}_$chunkIdx'),
+              points: List.of(currentChunk),
+              color: RouteSmoother.paceColor(avgP),
+              width: 4,
+              jointType: JointType.round,
+              startCap: Cap.roundCap,
+              endCap: Cap.roundCap,
+              zIndex: 2,
+            ),
+          );
+          chunkIdx++;
+          currentChunk = [coord];
+          currentBucket = b;
+          paceSum = p ?? 360.0;
+          paceCount = 1;
+        } else {
+          currentChunk.add(coord);
+          if (p != null) {
+            paceSum += p;
+            paceCount++;
+          }
+        }
+      }
+
+      if (currentChunk.length >= 2) {
+        final avgP = paceSum / paceCount;
+        set.add(
+          Polyline(
+            polylineId: PolylineId('me_${i}_$chunkIdx'),
+            points: currentChunk,
+            color: RouteSmoother.paceColor(avgP),
+            width: 4,
+            jointType: JointType.round,
+            startCap: Cap.roundCap,
+            endCap: Cap.roundCap,
+            zIndex: 2,
+          ),
+        );
+      }
     }
+
     tracker.memberTrails.forEach((uid, trail) {
       if (trail.length < 2) return;
       final color = MemberColors.of(tracker.liveMembers[uid]?.colorIndex);
@@ -258,14 +351,52 @@ class _RunScreenState extends State<RunScreen> {
         ),
       );
     });
+
     return set;
   }
 
   Set<Marker> _markers() {
     final me = tracker.run?.ownerId;
-    return {
-      for (final m in tracker.liveMembers.values)
-        if (m.userId != me && m.latitude != null)
+    final set = <Marker>{};
+
+    // 1) 출발 커스텀 마커
+    final firstSeg = tracker.segments.firstOrNull;
+    if (firstSeg != null && firstSeg.isNotEmpty) {
+      set.add(
+        Marker(
+          markerId: const MarkerId('start'),
+          position: firstSeg.first,
+          icon: _startIcon ?? BitmapDescriptor.defaultMarkerWithHue(BitmapDescriptor.hueGreen),
+          anchor: const Offset(0.5, 0.5),
+          infoWindow: const InfoWindow(title: '출발'),
+          zIndexInt: 10,
+        ),
+      );
+    }
+
+    // 2) 1km, 2km 등 킬로미터 마커 뱃지
+    final splits = tracker.run?.splits ?? const [];
+    for (final s in splits) {
+      if (s.lat != null && s.lng != null) {
+        final icon = _kmIcons[s.km];
+        if (icon != null) {
+          set.add(
+            Marker(
+              markerId: MarkerId('km_${s.km}'),
+              position: LatLng(s.lat!, s.lng!),
+              icon: icon,
+              anchor: const Offset(0.5, 0.5),
+              zIndexInt: 5,
+            ),
+          );
+        }
+      }
+    }
+
+    // 3) 파티원 마커
+    for (final m in tracker.liveMembers.values) {
+      if (m.userId != me && m.latitude != null) {
+        set.add(
           Marker(
             markerId: MarkerId('m_${m.userId}'),
             position: LatLng(m.latitude!, m.longitude!),
@@ -279,7 +410,11 @@ class _RunScreenState extends State<RunScreen> {
             ),
             zIndexInt: m.userId == _selectedMember ? 2 : 1,
           ),
-    };
+        );
+      }
+    }
+
+    return set;
   }
 
   // ------------------------------------------------------------ 컨트롤

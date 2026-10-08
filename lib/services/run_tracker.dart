@@ -13,6 +13,7 @@ import '../data/models/gps_point.dart';
 import '../data/models/party.dart';
 import '../data/models/run_record.dart';
 import 'live_session_service.dart';
+import 'region_service.dart';
 import 'server_clock.dart';
 import 'sync_service.dart';
 import 'voice_service.dart';
@@ -89,6 +90,9 @@ class RunTracker extends ChangeNotifier {
 
   /// 화면 표시용 경로 (일시정지마다 구간 분리). GPS 원본은 Local DB 에 따로 보관.
   final List<List<LatLng>> segments = [];
+
+  /// 각 포인트별 측정된 페이스 (sec/km, 히트맵 렌더링용)
+  final List<List<double?>> segmentPaces = [];
 
   /// 단체 러닝: 파티원 실시간 상태 / 받은 위치로 그린 간이 궤적
   Map<String, LiveMember> liveMembers = {};
@@ -207,6 +211,7 @@ class RunTracker extends ChangeNotifier {
     _resetInternal();
     config = cfg;
     final now = _nowMs();
+    final initialRegion = RegionService.instance.cachedWeatherRegion;
     run = RunRecord(
       id: const Uuid().v4(),
       ownerId: uid,
@@ -221,9 +226,11 @@ class RunTracker extends ChangeNotifier {
       raceStartAt: cfg.raceStartAt,
       colorIndex: cfg.colorIndex,
       participants: cfg.participants,
+      region: initialRegion,
       status: RunStatus.active,
     );
     segments.add([]);
+    segmentPaces.add([]);
     await LocalDb.instance.upsertRun(run!);
 
     state = TrackerState.running;
@@ -271,9 +278,11 @@ class RunTracker extends ChangeNotifier {
     for (final p in pts) {
       if (p.segment != seg) {
         segments.add([]);
+        segmentPaces.add([]);
         seg = p.segment;
       }
       segments.last.add(p.latLng);
+      segmentPaces.last.add(p.pace);
     }
     if (pts.isNotEmpty) {
       final lastP = pts.last;
@@ -335,6 +344,7 @@ class RunTracker extends ChangeNotifier {
     _last = null; // 일시정지 중 이동한 거리는 포함하지 않음
     _paceWindow.clear();
     segments.add([]);
+    segmentPaces.add([]);
     _activeSince = _nowMs();
     state = TrackerState.running;
     run!.status = RunStatus.active;
@@ -364,18 +374,38 @@ class RunTracker extends ChangeNotifier {
     final prevDistance = r.distanceM;
     final prevElapsed = _last?.elapsed ?? elapsed;
 
+    if (r.region == null) {
+      final cached = RegionService.instance.cachedWeatherRegion;
+      if (cached != null && cached.isNotEmpty) {
+        r.region = cached;
+        LocalDb.instance.upsertRun(r, notify: false);
+      } else if (pos.accuracy <= AppConfig.maxAccuracyM) {
+        RegionService.instance.getRegion(pos.latitude, pos.longitude).then((reg) {
+          if (reg != null && r.region == null) {
+            r.region = reg;
+            LocalDb.instance.upsertRun(r, notify: false);
+          }
+        });
+      }
+    }
+
+    double calculatedSpeed = pos.speed;
     if (_last != null) {
       final d = Geo.distance(_last!.lat, _last!.lng, pos.latitude, pos.longitude);
       final dt = (ts - _last!.ts) / 1000;
       if (dt <= 0) return;
       if (d / dt > AppConfig.maxSpeedMps) return; // GPS 튐
       r.distanceM += d;
+      // pos.speed 가 0이거나 미지원 시 거리/시간 기반 속도 산출
+      if (calculatedSpeed <= 0 && dt > 0) {
+        calculatedSpeed = d / dt;
+      }
     }
 
     // 속도 / 고도
-    if (pos.speed >= 0 && pos.speed < AppConfig.maxSpeedMps) {
-      _lastSpeed = pos.speed;
-      if ((r.maxSpeedMps ?? 0) < pos.speed) r.maxSpeedMps = pos.speed;
+    if (calculatedSpeed >= 0 && calculatedSpeed < AppConfig.maxSpeedMps) {
+      _lastSpeed = calculatedSpeed;
+      if ((r.maxSpeedMps ?? 0) < calculatedSpeed) r.maxSpeedMps = calculatedSpeed;
     }
     if (pos.altitude != 0) {
       if (_lastAltitude == null) {
@@ -400,11 +430,12 @@ class RunTracker extends ChangeNotifier {
 
     _last = (lat: pos.latitude, lng: pos.longitude, ts: ts, elapsed: elapsed, dist: r.distanceM);
     segments.last.add(latLng);
+    segmentPaces.last.add(currentPaceSec);
     r.durationMs = elapsed;
     r.avgPaceSecPerKm = _pace(elapsed, r.distanceM);
 
-    // Local DB 원본 저장 (매초가 아니라 최소 간격 기준)
-    final minGap = isGroup ? 2000 : 3000;
+    // Local DB 원본 저장 (1~2초 주기)
+    final minGap = isGroup ? 1500 : 2000;
     final segmentStart = segments.last.length == 1;
     if (segmentStart || ts - _lastStoredTs >= minGap) {
       _lastStoredTs = ts;
@@ -424,14 +455,14 @@ class RunTracker extends ChangeNotifier {
       ));
     }
 
-    _checkSplits(prevDistance, prevElapsed, elapsed);
+    _checkSplits(prevDistance, prevElapsed, elapsed, pos);
     _checkGoals();
     _maybePublish();
     _persistThrottled();
     notifyListeners();
   }
 
-  void _checkSplits(double prevDistance, int prevElapsed, int elapsed) {
+  void _checkSplits(double prevDistance, int prevElapsed, int elapsed, Position pos) {
     final r = run!;
     while (r.distanceM >= (r.splits.length + 1) * 1000) {
       final km = r.splits.length + 1;
@@ -445,7 +476,25 @@ class RunTracker extends ChangeNotifier {
       final raceMs = r.raceStartAt == null
           ? null
           : (ServerClock.nowMs() - r.raceStartAt! - (elapsed - crossMs)).clamp(0, 1 << 40).toInt();
-      r.splits.add(KmSplit(km: km, movingMs: crossMs, raceMs: raceMs, paceSec: lapPace));
+
+      double? splitLat;
+      double? splitLng;
+      if (_last != null) {
+        splitLat = _last!.lat + (pos.latitude - _last!.lat) * frac;
+        splitLng = _last!.lng + (pos.longitude - _last!.lng) * frac;
+      } else {
+        splitLat = pos.latitude;
+        splitLng = pos.longitude;
+      }
+
+      r.splits.add(KmSplit(
+        km: km,
+        movingMs: crossMs,
+        raceMs: raceMs,
+        paceSec: lapPace,
+        lat: splitLat,
+        lng: splitLng,
+      ));
       VoiceService.instance.announceKm(km: km, lapPaceSec: lapPace, avgPaceSec: _pace(crossMs, target));
     }
   }
@@ -582,6 +631,9 @@ class RunTracker extends ChangeNotifier {
 
       // 1) Local DB 가 원본 → 가장 먼저 확정 저장
       await LocalDb.instance.upsertRun(r);
+      if (r.region == null && position != null) {
+        unawaited(RegionService.instance.resolveAndSaveRegion(r, fallbackPos: position));
+      }
 
       // 2) 단체 러닝이면 실시간 상태를 FINISHED 로
       _maybePublish(force: true);
@@ -639,6 +691,7 @@ class RunTracker extends ChangeNotifier {
     position = null;
     currentPaceSec = null;
     segments.clear();
+    segmentPaces.clear();
     liveMembers = {};
     memberTrails.clear();
     _accumulatedMs = 0;

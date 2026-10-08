@@ -7,8 +7,10 @@ import '../../core/format.dart';
 import '../../data/local/local_db.dart';
 import '../../data/models/gps_point.dart';
 import '../../data/models/run_record.dart';
+import '../../services/sync_service.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/run_thumb.dart';
+import 'gallery_feed_view.dart';
 import 'run_detail_screen.dart';
 import 'stats_view.dart';
 
@@ -20,23 +22,28 @@ class HistoryScreen extends StatefulWidget {
   State<HistoryScreen> createState() => _HistoryScreenState();
 }
 
-class _HistoryScreenState extends State<HistoryScreen> {
+class _HistoryScreenState extends State<HistoryScreen>
+    with SingleTickerProviderStateMixin {
   final uid = AppConfig.useFirebase
       ? FirebaseAuth.instance.currentUser!.uid
       : 'dummy_uid';
   List<RunRecord> _runs = [];
   Map<String, RunPhoto> _photos = {};
   bool _loading = true;
+  late final TabController _tabController;
+  bool _isGridView = true;
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 3, vsync: this);
     LocalDb.instance.changes.addListener(_load);
     _load();
   }
 
   @override
   void dispose() {
+    _tabController.dispose();
     LocalDb.instance.changes.removeListener(_load);
     super.dispose();
   }
@@ -54,37 +61,162 @@ class _HistoryScreenState extends State<HistoryScreen> {
     });
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 3,
-      child: Scaffold(
-        appBar: AppBar(
-          title: const Text('홈 · 러닝 기록'),
-          bottom: const TabBar(
-            indicatorColor: AppColors.neon,
-            labelColor: AppColors.neon,
-            unselectedLabelColor: AppColors.textSecondary,
-            tabs: [
-              Tab(icon: Icon(Icons.calendar_month)),
-              Tab(icon: Icon(Icons.view_list)),
-              Tab(icon: Icon(Icons.insights)),
+  void _toast(
+    String msg, {
+    IconData icon = Icons.info_outline_rounded,
+    Color accentColor = AppColors.neon,
+  }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: AppColors.surfaceHigh,
+          margin: const EdgeInsets.only(bottom: 24, left: 16, right: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+            side: BorderSide(color: accentColor, width: 1.5),
+          ),
+          content: Row(
+            children: [
+              Icon(icon, color: accentColor),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  msg,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-        body: _loading
-            ? const Center(child: CircularProgressIndicator())
-            : TabBarView(
-                children: [
-                  _MonthView(runs: _runs, photos: _photos),
-                  _ListView(runs: _runs, photos: _photos),
-                  StatsView(
-                    runs: _runs,
-                    onOpenRun: (r) => openRunDetail(context, r),
-                  ),
-                ],
+      );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('홈 · 러닝 기록'),
+        actions: [
+          ValueListenableBuilder<bool>(
+            valueListenable: SyncService.instance.syncing,
+            builder: (context, syncing, _) {
+              final pendingCount =
+                  _runs.where((r) => r.syncStatus != SyncStatus.synced).length;
+              return IconButton(
+                icon: syncing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.neon,
+                        ),
+                      )
+                    : Badge(
+                        isLabelVisible: pendingCount > 0,
+                        label: Text('$pendingCount'),
+                        backgroundColor: Colors.orange,
+                        child: const Icon(Icons.sync),
+                      ),
+                tooltip: '클라우드 동기화',
+                onPressed: syncing
+                    ? null
+                    : () async {
+                        final res =
+                            await SyncService.instance.syncAllManual();
+                        if (!context.mounted) return;
+                        switch (res) {
+                          case SyncResult.success:
+                            _toast(
+                              '클라우드 동기화가 완료되었습니다! ☁️',
+                              icon: Icons.cloud_done_rounded,
+                              accentColor: AppColors.neon,
+                            );
+                          case SyncResult.noPending:
+                            _toast(
+                              '모든 러닝 기록이 이미 동기화되어 있어요.',
+                              icon: Icons.check_circle_outline_rounded,
+                              accentColor: AppColors.neon,
+                            );
+                          case SyncResult.notLoggedIn:
+                            _toast(
+                              '클라우드 동기화를 위해 로그인이 필요해요.',
+                              icon: Icons.lock_outline_rounded,
+                              accentColor: Colors.orange,
+                            );
+                          case SyncResult.failed:
+                            _toast(
+                              '네트워크 연결을 확인해주세요. (오프라인 상태에서는 스마트폰에 안전하게 보관돼요)',
+                              icon: Icons.wifi_off_rounded,
+                              accentColor: Colors.orange,
+                            );
+                        }
+                      },
+              );
+            },
+          ),
+        ],
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: AppColors.neon,
+          labelColor: AppColors.neon,
+          unselectedLabelColor: AppColors.textSecondary,
+          onTap: (index) {
+            // 이미 갤러리/피드 탭(인덱스 1)에 위치해 있을 때 다시 누르면 그리드 <-> 피드 모션 스위칭
+            if (index == 1 && _tabController.index == 1) {
+              setState(() => _isGridView = !_isGridView);
+            }
+          },
+          tabs: [
+            const Tab(icon: Icon(Icons.calendar_month)),
+            Tab(
+              icon: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 250),
+                transitionBuilder: (child, anim) => RotationTransition(
+                  turns: child.key == const ValueKey('grid_tab')
+                      ? Tween<double>(begin: 0.75, end: 1.0).animate(anim)
+                      : Tween<double>(begin: 0.25, end: 1.0).animate(anim),
+                  child: FadeTransition(opacity: anim, child: child),
+                ),
+                child: _isGridView
+                    ? const Icon(
+                        Icons.grid_view_rounded,
+                        key: ValueKey('grid_tab'),
+                      )
+                    : const Icon(
+                        Icons.view_agenda_rounded,
+                        key: ValueKey('feed_tab'),
+                      ),
               ),
+            ),
+            const Tab(icon: Icon(Icons.insights)),
+          ],
+        ),
       ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _MonthView(runs: _runs, photos: _photos),
+                GalleryFeedView(
+                  runs: _runs,
+                  photos: _photos,
+                  onOpenRun: (r) => openRunDetail(context, r),
+                  isGridView: _isGridView,
+                ),
+                StatsView(
+                  runs: _runs,
+                  onOpenRun: (r) => openRunDetail(context, r),
+                ),
+              ],
+            ),
     );
   }
 }
@@ -108,6 +240,18 @@ class _MonthViewState extends State<_MonthView>
     with AutomaticKeepAliveClientMixin {
   DateTime _focused = DateTime.now();
   DateTime? _selected = DateTime.now();
+  CalendarFormat _calendarFormat = CalendarFormat.month;
+  double _calendarDragDistance = 0;
+
+  void _setFormat(CalendarFormat format) {
+    if (_calendarFormat == format) return;
+    setState(() {
+      _calendarFormat = format;
+      if (format == CalendarFormat.week && _selected != null) {
+        _focused = _selected!;
+      }
+    });
+  }
 
   @override
   bool get wantKeepAlive => true;
@@ -203,95 +347,205 @@ class _MonthViewState extends State<_MonthView>
         ? <RunRecord>[]
         : _runsOn(_selected!);
 
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 32),
+    return Column(
       children: [
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Row(
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: Column(
             children: [
-              _MiniStat(value: '${Fmt.km(monthDist, digits: 1)} km', label: '${_focused.month}월 마일리지'),
-              _MiniStat(value: '${monthRuns.length}', label: '러닝'),
-              _MiniStat(value: '$monthDays', label: '달린 날'),
-              _MiniStat(value: Fmt.minutes(monthTime), label: '총 시간'),
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Row(
+                  children: [
+                    _MiniStat(value: '${Fmt.km(monthDist, digits: 1)} km', label: '${_focused.month}월 마일리지'),
+                    _MiniStat(value: '${monthRuns.length}', label: '러닝'),
+                    _MiniStat(value: '$monthDays', label: '달린 날'),
+                    _MiniStat(value: Fmt.minutes(monthTime), label: '총 시간'),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              GestureDetector(
+                onVerticalDragStart: (_) => _calendarDragDistance = 0,
+                onVerticalDragUpdate: (details) =>
+                    _calendarDragDistance += details.delta.dy,
+                onVerticalDragEnd: (details) {
+                  final velocity = details.primaryVelocity ?? 0;
+                  if ((velocity < -200 || _calendarDragDistance < -55) &&
+                      _calendarFormat == CalendarFormat.month) {
+                    _setFormat(CalendarFormat.week);
+                  } else if ((velocity > 200 || _calendarDragDistance > 55) &&
+                      _calendarFormat == CalendarFormat.week) {
+                    _setFormat(CalendarFormat.month);
+                  }
+                  _calendarDragDistance = 0;
+                },
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.bg,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    children: [
+                      TableCalendar<RunRecord>(
+                        locale: 'ko_KR',
+                        firstDay: DateTime(2020),
+                        lastDay: DateTime.now().add(const Duration(days: 365)),
+                        focusedDay: _calendarFormat == CalendarFormat.week
+                            ? _focused
+                            : ((_selected != null &&
+                                    _selected!.year == _focused.year &&
+                                    _selected!.month == _focused.month)
+                                ? _selected!
+                                : _focused),
+                        calendarFormat: _calendarFormat,
+                        onFormatChanged: (format) => _setFormat(format),
+                        selectedDayPredicate: (d) =>
+                            _selected != null && isSameDay(d, _selected),
+                        eventLoader: _runsOn,
+                        rowHeight: 52,
+                        daysOfWeekHeight: 22,
+                        startingDayOfWeek: StartingDayOfWeek.sunday,
+                        availableCalendarFormats: const {
+                          CalendarFormat.month: '월',
+                          CalendarFormat.week: '주',
+                        },
+                        headerStyle: const HeaderStyle(
+                          titleCentered: true,
+                          formatButtonVisible: false,
+                          titleTextStyle: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        onDaySelected: (sel, foc) => setState(() {
+                          _selected = sel;
+                          _focused = sel;
+                        }),
+                        onPageChanged: (foc) => setState(() => _focused = foc),
+                        calendarBuilders: CalendarBuilders(
+                          defaultBuilder: (_, day, _) => _dayCell(day),
+                          todayBuilder: (_, day, _) => _dayCell(day, today: true),
+                          selectedBuilder: (_, day, _) => _dayCell(
+                            day,
+                            selected: true,
+                            today: isSameDay(day, DateTime.now()),
+                          ),
+                          outsideBuilder: (_, day, _) => Center(
+                            child: Text(
+                              '${day.day}',
+                              style: const TextStyle(color: AppColors.outline, fontSize: 12),
+                            ),
+                          ),
+                          markerBuilder: (_, _, _) => const SizedBox.shrink(),
+                        ),
+                      ),
+                      // 하단 핸들 인디케이터 (탭하거나 드래그하여 월<->주 전환)
+                      GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: () {
+                          _setFormat(
+                            _calendarFormat == CalendarFormat.month
+                                ? CalendarFormat.week
+                                : CalendarFormat.month,
+                          );
+                        },
+                        onVerticalDragEnd: (details) {
+                          final velocity = details.primaryVelocity ?? 0;
+                          if (velocity < -120 && _calendarFormat == CalendarFormat.month) {
+                            _setFormat(CalendarFormat.week);
+                          } else if (velocity > 120 && _calendarFormat == CalendarFormat.week) {
+                            _setFormat(CalendarFormat.month);
+                          }
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 6),
+                          child: Center(
+                            child: Container(
+                              width: 40,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: AppColors.outline.withValues(alpha: 0.8),
+                                borderRadius: BorderRadius.circular(2.5),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ),
-        const SizedBox(height: 8),
-        TableCalendar<RunRecord>(
-          locale: 'ko_KR',
-          firstDay: DateTime(2020),
-          lastDay: DateTime.now().add(const Duration(days: 365)),
-          focusedDay: _focused,
-          selectedDayPredicate: (d) =>
-              _selected != null && isSameDay(d, _selected),
-          eventLoader: _runsOn,
-          rowHeight: 58,
-          daysOfWeekHeight: 22,
-          startingDayOfWeek: StartingDayOfWeek.sunday,
-          availableCalendarFormats: const {CalendarFormat.month: '월'},
-          headerStyle: const HeaderStyle(
-            titleCentered: true,
-            formatButtonVisible: false,
-            titleTextStyle: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-          onDaySelected: (sel, foc) => setState(() {
-            _selected = sel;
-            _focused = foc;
-          }),
-          onPageChanged: (foc) => setState(() => _focused = foc),
-          calendarBuilders: CalendarBuilders(
-            defaultBuilder: (_, day, _) => _dayCell(day),
-            todayBuilder: (_, day, _) => _dayCell(day, today: true),
-            selectedBuilder: (_, day, _) => _dayCell(
-              day,
-              selected: true,
-              today: isSameDay(day, DateTime.now()),
-            ),
-            outsideBuilder: (_, day, _) => Center(
-              child: Text(
-                '${day.day}',
-                style: const TextStyle(color: AppColors.outline, fontSize: 12),
+        const SizedBox(height: 6),
+        // 하단 선택된 날짜의 러닝 리스트 (스크롤 시 캘린더가 접히거나 확장되도록 NotificationListener 적용)
+        Expanded(
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              if (notification is ScrollUpdateNotification) {
+                final delta = notification.scrollDelta ?? 0;
+                // 리스트를 아래로 스크롤(손가락을 위로 쓸어올림) 시 delta > 25일 때만 주 단위로 축소
+                if (delta > 25 && _calendarFormat == CalendarFormat.month) {
+                  _setFormat(CalendarFormat.week);
+                } else if (delta < -20 &&
+                    _calendarFormat == CalendarFormat.week &&
+                    notification.metrics.pixels <= 10) {
+                  // 최상단에서 손가락을 아래로 확실히 내릴 때 월 단위로 복귀
+                  _setFormat(CalendarFormat.month);
+                }
+              } else if (notification is OverscrollNotification) {
+                // 리스트 최상단에서 아래로 15px 이상 확실히 당길 때 월 단위로 확장
+                if (notification.overscroll < -15 &&
+                    _calendarFormat == CalendarFormat.week) {
+                  _setFormat(CalendarFormat.month);
+                }
+              }
+              return false;
+            },
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(
+                parent: BouncingScrollPhysics(),
               ),
-            ),
-            markerBuilder: (_, _, _) => const SizedBox.shrink(),
-          ),
-        ),
-        const SizedBox(height: 12),
-        if (_selected != null)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Text(
-              Fmt.date(_selected!.millisecondsSinceEpoch),
-              style: const TextStyle(
-                fontWeight: FontWeight.w800,
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ),
-        if (selectedRuns.isEmpty)
-          const Padding(
-            padding: EdgeInsets.all(24),
-            child: Text(
-              '이 날은 기록이 없어요. 오늘 한 번 달려볼까요? 🏃',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: AppColors.textSecondary),
-            ),
-          ),
-        ...selectedRuns.map(
-          (r) => Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: RunListTile(
-              run: r,
-              photo: widget.photos[r.id],
-              onTap: () => openRunDetail(context, r),
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 32),
+              children: [
+                if (_selected != null)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+                    child: Text(
+                      Fmt.date(_selected!.millisecondsSinceEpoch),
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.textSecondary,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                if (selectedRuns.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 36),
+                    child: Text(
+                      '이 날은 기록이 없어요. 오늘 한 번 달려볼까요? 🏃',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: AppColors.textSecondary),
+                    ),
+                  ),
+                ...selectedRuns.map(
+                  (r) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: RunListTile(
+                      run: r,
+                      photo: widget.photos[r.id],
+                      onTap: () => openRunDetail(context, r),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -329,43 +583,6 @@ class _MiniStat extends StatelessWidget {
   );
 }
 
-// ====================================================================== 리스트 뷰
-
-class _ListView extends StatelessWidget {
-  const _ListView({required this.runs, required this.photos});
-  final List<RunRecord> runs;
-  final Map<String, RunPhoto> photos;
-
-  @override
-  Widget build(BuildContext context) {
-    if (runs.isEmpty) {
-      return const Center(
-        child: Text(
-          '아직 러닝 기록이 없어요',
-          style: TextStyle(color: AppColors.textSecondary),
-        ),
-      );
-    }
-    return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-      itemCount: runs.length,
-      itemBuilder: (_, i) {
-        final run = runs[i];
-        // 바로 이전(더 과거) 기록과 페이스 비교 → 나아지고 있는지
-        final older = i + 1 < runs.length ? runs[i + 1] : null;
-        return Padding(
-          padding: const EdgeInsets.only(bottom: 8),
-          child: RunListTile(
-            run: run,
-            photo: photos[run.id],
-            previous: older,
-            onTap: () => openRunDetail(context, run),
-          ),
-        );
-      },
-    );
-  }
-}
 
 /// 러닝 기록 한 줄 요약 (평균 페이스 / km / 시간)
 class RunListTile extends StatelessWidget {
